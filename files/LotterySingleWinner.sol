@@ -13,7 +13,7 @@ interface IEntropyConsumer {
 }
 
 /**
- * @title LotterySingleWinner (Mainnet Candidate v1.6)
+ * @title LotterySingleWinner
  * @notice A single-winner lottery instance using Pyth Entropy.
  * @dev Updated: explicit cancel snapshot + native surplus sweep + stricter funding check.
  */
