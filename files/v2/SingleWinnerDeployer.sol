@@ -14,6 +14,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
     error ZeroAddress();
     error FeeTooHigh();
     error NotAuthorizedRegistrar();
+    error InvalidCallbackGasLimit();
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrationFailed(address indexed lottery, address indexed creator);
@@ -36,6 +37,9 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
     );
 
     event ConfigUpdated(address usdc, address entropy, address provider, uint32 callbackGasLimit, address feeRecipient, uint256 protocolFeePercent);
+
+    // Default chosen for Etherlink production
+    uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
 
     address public owner;
     modifier onlyOwner() {
@@ -61,7 +65,6 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         address _usdc,
         address _entropy,
         address _entropyProvider,
-        uint32 _callbackGasLimit,
         address _feeRecipient,
         uint256 _protocolFeePercent
     ) {
@@ -79,12 +82,12 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         usdc = _usdc;
         entropy = _entropy;
         entropyProvider = _entropyProvider;
-        callbackGasLimit = _callbackGasLimit;
+        callbackGasLimit = DEFAULT_CALLBACK_GAS_LIMIT;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
 
         emit DeployerOwnershipTransferred(address(0), _owner);
-        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
+        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, callbackGasLimit, _feeRecipient, _protocolFeePercent);
     }
 
     function setConfig(
@@ -97,6 +100,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
     ) external onlyOwner {
         if (_usdc == address(0) || _entropy == address(0) || _provider == address(0) || _fee == address(0)) revert ZeroAddress();
         if (_percent > 20) revert FeeTooHigh();
+        if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         usdc = _usdc;
         entropy = _entropy;
@@ -129,7 +133,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
             usdcToken: usdc,
             entropy: entropy,
             entropyProvider: entropyProvider,
-            callbackGasLimit: callbackGasLimit,
+            callbackGasLimit: callbackGasLimit, // <- 500,000 by default
             feeRecipient: feeRecipient,
             protocolFeePercent: protocolFeePercent,
             creator: msg.sender,
