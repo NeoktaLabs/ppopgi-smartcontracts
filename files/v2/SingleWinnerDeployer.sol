@@ -16,7 +16,6 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
     error NotAuthorizedRegistrar();
     error InvalidCallbackGasLimit();
 
-    // ✅ New: explicit, indexer-friendly revert when registry write fails
     error RegistryRegistrationFailed(bytes lowLevelData);
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
@@ -47,7 +46,6 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         uint256 protocolFeePercent
     );
 
-    // Default chosen for Etherlink production
     uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
 
     address public owner;
@@ -74,6 +72,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         address _usdc,
         address _entropy,
         address _entropyProvider,
+        uint32 _callbackGasLimit,      // ✅ now used
         address _feeRecipient,
         uint256 _protocolFeePercent
     ) {
@@ -83,6 +82,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
+        if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         owner = _owner;
         registry = LotteryRegistry(_registry);
@@ -91,7 +91,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         usdc = _usdc;
         entropy = _entropy;
         entropyProvider = _entropyProvider;
-        callbackGasLimit = DEFAULT_CALLBACK_GAS_LIMIT;
+        callbackGasLimit = _callbackGasLimit;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
 
@@ -157,23 +157,16 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
 
         LotterySingleWinnerV2 lot = new LotterySingleWinnerV2(params);
 
-        // Fund pot into the newly created lottery
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
-
-        // Move lottery to Open (verifies funding is present)
         lot.confirmFunding();
-
-        // Hand off admin to the safe owner (multisig, etc.)
         lot.transferOwnership(safeOwner);
 
         lotteryAddr = address(lot);
         uint64 deadline = lot.deadline();
 
-        // ✅ Hard requirement: registry write must succeed, otherwise revert
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
             // ok
         } catch (bytes memory data) {
-            // entire tx reverts, so no orphan lottery / no orphan funding
             revert RegistryRegistrationFailed(data);
         }
 
