@@ -15,7 +15,6 @@ interface IEntropyConsumer {
 contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
-    // --- Added: recommended production default ---
     uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
 
     struct LotteryParams {
@@ -35,7 +34,7 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
         uint32 minPurchaseAmount;
     }
 
-    // Errors (kept)
+    // Errors
     error InvalidEntropy();
     error InvalidProvider();
     error InvalidUSDC();
@@ -51,7 +50,6 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
     error MaxLessThanMin();
     error BatchTooCheap();
 
-    // --- Added: clean error for callback gas limit ---
     error InvalidCallbackGasLimit();
 
     error NotDeployer();
@@ -92,7 +90,7 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
     error AccountingMismatch();
     error UnexpectedTransferAmount();
 
-    // Events (kept)
+    // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(address indexed buyer, uint256 count, uint256 totalCost, uint256 totalSold, uint256 rangeIndex, bool isNewRange);
     event LotteryFinalized(uint64 requestId, uint256 totalSold, address provider);
@@ -120,7 +118,7 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
     uint256 public immutable protocolFeePercent;
     address public immutable deployer;
 
-    IEntropyV2 public entropy;           // v2
+    IEntropyV2 public entropy;
     address public entropyProvider;
     uint32 public callbackGasLimit;
 
@@ -178,9 +176,6 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
         if (params.feeRecipient == address(0)) revert InvalidFeeRecipient();
         if (params.creator == address(0)) revert InvalidCreator();
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
-
-        // --- Added: ensure callback gas limit isn't accidentally zero ---
-        // (You can still choose any non-zero value via deployer config / owner update.)
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         try IERC20Metadata(params.usdcToken).decimals() returns (uint8 d) {
@@ -291,7 +286,6 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
-        // Cancel path (no entropy needed)
         if (isExpired && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
             if (msg.value > 0) _safeNativeTransfer(msg.sender, msg.value);
@@ -340,6 +334,10 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
     function _resolve(bytes32 rand) internal {
         uint256 total = soldAtDrawing;
         if (total == 0) revert NoParticipants();
+
+        // ✅ Invariant check: ticketRanges must match soldAtDrawing (exclusive upper bound model)
+        uint256 len = ticketRanges.length;
+        if (len == 0 || uint256(ticketRanges[len - 1].upperBound) != total) revert AccountingMismatch();
 
         entropyRequestId = 0;
         soldAtDrawing = 0;
@@ -523,7 +521,7 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
 
     function setCallbackGasLimit(uint32 gasLimit) external onlyOwner {
         if (activeDrawings != 0) revert DrawingsActive();
-        if (gasLimit == 0) revert InvalidCallbackGasLimit(); // --- Added guard ---
+        if (gasLimit == 0) revert InvalidCallbackGasLimit();
         callbackGasLimit = gasLimit;
         emit CallbackGasLimitUpdated(gasLimit);
     }
