@@ -8,11 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-interface IEntropyConsumer {
-    function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external;
-}
-
-contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pausable {
+contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
@@ -316,19 +312,13 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
-
+    /**
+     * ✅ The ONLY callback entrypoint you need.
+     * Entropy calls this function name/signature on your consumer.
+     */
     function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
         if (msg.sender != address(entropy)) revert UnauthorizedCallback();
-        _handleEntropyCallback(sequenceNumber, provider, randomNumber);
-    }
 
-
-    function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external override {
-        if (msg.sender != address(entropy)) revert UnauthorizedCallback();
-        _handleEntropyCallback(sequenceNumber, provider, randomNumber);
-    }
-
-    function _handleEntropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) internal {
         if (entropyRequestId == 0 || sequenceNumber != entropyRequestId) {
             emit CallbackRejected(sequenceNumber, 1);
             return;
@@ -492,7 +482,7 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
         totalClaimableNative -= amount;
         (bool ok,) = payable(to).call{value: amount}("");
         if (!ok) revert NativeRefundFailed();
-        emit NativeClaimed(msg.sender, amount);
+        emit NativeClaimed(to, amount);
     }
 
     function sweepSurplus(address to) external onlyOwner nonReentrant {
