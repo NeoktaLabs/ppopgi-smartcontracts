@@ -8,17 +8,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-/**
- * ✅ Minimal patch:
- * Entropy is calling _entropyCallback(uint64,address,bytes32) (selector 0x52a5f1f8),
- * but your contract only had entropyCallback(...).
- *
- * We add the missing external entrypoint _entropyCallback(...) and route it to
- * the existing logic, without changing anything else.
- *
- * NOTE: This is intentionally minimal and does not refactor to the SDK consumer base class.
- */
-
 interface IEntropyConsumer {
     function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external;
 }
@@ -327,23 +316,13 @@ contract LotterySingleWinnerV2 is Ownable, IEntropyConsumer, ReentrancyGuard, Pa
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
-    /**
-     * ✅ Minimal patch: Entropy calls this external entrypoint.
-     * This must exist, otherwise the callback reverts with "Reverted" and no logs.
-     */
-    function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
-        // Keep the same authorization model you already intended.
-        if (msg.sender != address(entropy)) revert UnauthorizedCallback();
 
-        // Route into the same logic as your original callback.
-        // (We call the internal helper to avoid any edge-case around msg.sender.)
+    function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
+        if (msg.sender != address(entropy)) revert UnauthorizedCallback();
         _handleEntropyCallback(sequenceNumber, provider, randomNumber);
     }
 
-    /**
-     * Your original external callback is kept for compatibility (e.g., if you ever call it manually),
-     * but Entropy itself will use _entropyCallback.
-     */
+
     function entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external override {
         if (msg.sender != address(entropy)) revert UnauthorizedCallback();
         _handleEntropyCallback(sequenceNumber, provider, randomNumber);
