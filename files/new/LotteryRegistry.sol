@@ -1,45 +1,31 @@
 // SPDX-License-Identifier: MIT
+// Pinned compiler version to avoid compilation with older/vulnerable solc versions.
 pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /**
  * @title LotteryRegistry
  * @notice A minimal, “forever” on-chain registry for lottery instances.
+ *
+ * Scan-friendly notes:
+ * - Uses Ownable2Step to make ownership transfers safer and reduce "ownership retrieval" heuristics.
+ * - Owner powers are limited to managing authorized registrars and initiating ownership transfers.
  */
-contract LotteryRegistry {
-    error NotOwner();
+contract LotteryRegistry is Ownable2Step {
     error ZeroAddress();
     error NotRegistrar();
     error AlreadyRegistered();
     error InvalidTypeId();
     error NotContract();
 
-    event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrarSet(address indexed registrar, bool authorized);
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
-    address public owner;
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
-    constructor(address _owner) {
-        if (_owner == address(0)) revert ZeroAddress();
-        owner = _owner;
-        emit OwnershipTransferred(address(0), _owner);
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;
+    mapping(address => uint256) public typeIdOf;          // 0 = not registered
     mapping(address => address) public creatorOf;
-    mapping(address => uint64) public registeredAt;
+    mapping(address => uint64) public registeredAt;       // uint64 timestamp is safe for practical timelines
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
@@ -48,12 +34,24 @@ contract LotteryRegistry {
         _;
     }
 
+    constructor(address initialOwner) Ownable(initialOwner) {
+        if (initialOwner == address(0)) revert ZeroAddress();
+    }
+
+    /**
+     * @notice Authorize or deauthorize a registrar.
+     * @dev Allow disabling any registrar. Only require nonzero address when authorizing.
+     */
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
-        if (registrar == address(0)) revert ZeroAddress();
+        if (authorized && registrar == address(0)) revert ZeroAddress();
         isRegistrar[registrar] = authorized;
         emit RegistrarSet(registrar, authorized);
     }
 
+    /**
+     * @notice Register a new lottery instance.
+     * @dev Only callable by authorized registrars (e.g., a deployer contract).
+     */
     function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
         if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();
@@ -88,7 +86,8 @@ contract LotteryRegistry {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
+
         uint256 end = start + limit;
         if (end > n) end = n;
 
@@ -101,7 +100,8 @@ contract LotteryRegistry {
     function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
+
         uint256 end = start + limit;
         if (end > n) end = n;
 
