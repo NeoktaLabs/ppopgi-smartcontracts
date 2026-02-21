@@ -1,38 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "@openzeppelin/contracts/access/Ownable2Step.sol";
-
-contract LotteryRegistry is Ownable2Step {
+contract LotteryRegistry {
     error ZeroAddress();
     error NotRegistrar();
     error AlreadyRegistered();
     error InvalidTypeId();
     error NotContract();
 
-    event RegistrarSet(address indexed registrar, bool authorized);
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
+    /// @notice The only address allowed to register lotteries (intended: your SingleWinnerDeployer).
+    address public immutable registrar;
+
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;     // 0 = not registered
+    mapping(address => uint256) public typeIdOf; // 0 = not registered
     mapping(address => address) public creatorOf;
     mapping(address => uint64) public registeredAt;
     mapping(uint256 => address[]) internal lotteriesByType;
-    mapping(address => bool) public isRegistrar;
 
     modifier onlyRegistrar() {
-        if (!isRegistrar[msg.sender]) revert NotRegistrar();
+        if (msg.sender != registrar) revert NotRegistrar();
         _;
     }
 
-    constructor(address initialOwner) Ownable(initialOwner) {
-        if (initialOwner == address(0)) revert ZeroAddress();
+    constructor(address _registrar) {
+        if (_registrar == address(0)) revert ZeroAddress();
+        registrar = _registrar;
     }
 
-    function setRegistrar(address registrar, bool authorized) external onlyOwner {
-        if (authorized && registrar == address(0)) revert ZeroAddress();
-        isRegistrar[registrar] = authorized;
-        emit RegistrarSet(registrar, authorized);
+    /// @notice Kept for compatibility with your existing deployer check.
+    function isRegistrar(address who) external view returns (bool) {
+        return who == registrar;
     }
 
     function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
@@ -69,7 +68,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -80,10 +79,14 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
+    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory page)
+    {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
