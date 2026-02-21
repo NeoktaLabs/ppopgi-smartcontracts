@@ -144,7 +144,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 durationSeconds,
         uint32 minPurchaseAmount
     ) external view returns (SingleWinnerLottery.LotteryParams memory params) {
-        // same values as createSingleWinnerLottery snapshots
         params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
@@ -161,6 +160,16 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
             durationSeconds: durationSeconds,
             minPurchaseAmount: minPurchaseAmount
         });
+    }
+
+    /// @notice UI helper: whether this deployer is currently authorized to register lotteries in the registry.
+    function isDeployerAuthorized() external view returns (bool) {
+        return registry.isRegistrar(address(this));
+    }
+
+    /// @notice UI helper: tells the user what the deploy will pull from their USDC balance (the pot).
+    function quoteCreate(uint256 winningPot) external view returns (address usdcToken, uint256 usdcAmountToTransfer) {
+        return (usdc, winningPot);
     }
 
     function createSingleWinnerLottery(
