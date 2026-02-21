@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Pinned compiler version to avoid compilation with older/vulnerable solc versions.
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
