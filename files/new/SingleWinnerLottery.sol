@@ -216,6 +216,159 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit FundingConfirmed(msg.sender, winningPot);
     }
 
+    // =========================
+    // UX / helper views
+    // =========================
+
+    function isOpen() external view returns (bool) {
+        return status == Status.Open && block.timestamp < deadline;
+    }
+
+    function isExpired() public view returns (bool) {
+        return block.timestamp >= deadline;
+    }
+
+    function isSoldOut() public view returns (bool) {
+        return (maxTickets > 0 && getSold() >= maxTickets);
+    }
+
+    function isFinalizable() external view returns (bool) {
+        if (status != Status.Open) return false;
+        return isExpired() || isSoldOut();
+    }
+
+    function isCancelable() external view returns (bool) {
+        if (status != Status.Open) return false;
+        if (block.timestamp < deadline) return false;
+        return getSold() < minTickets;
+    }
+
+    /// @notice Returns whether the emergency hatch is currently available and at what timestamps it becomes available.
+    function isEmergencyCancelable()
+        external
+        view
+        returns (bool privilegedNow, bool publicNow, uint256 privilegedAt, uint256 publicAt)
+    {
+        if (status != Status.Drawing) {
+            return (false, false, 0, 0);
+        }
+        privilegedAt = uint256(drawingRequestedAt) + PRIVILEGED_HATCH_DELAY;
+        publicAt = uint256(drawingRequestedAt) + PUBLIC_HATCH_DELAY;
+
+        privilegedNow = block.timestamp > privilegedAt;
+        publicNow = block.timestamp > publicAt;
+    }
+
+    function quoteBuy(uint256 count) external view returns (uint256 totalCost) {
+        return ticketPrice * count;
+    }
+
+    /// @notice Remaining tickets until cap. If maxTickets==0, returns (0,true).
+    function remainingTickets() external view returns (uint256 remaining, bool unlimited) {
+        if (maxTickets == 0) return (0, true);
+        uint256 sold = getSold();
+        if (sold >= maxTickets) return (0, false);
+        return (uint256(maxTickets) - sold, false);
+    }
+
+    /// @notice Max tickets buyable in a single call right now (respects caps + MAX_BATCH_BUY).
+    function maxBuyableNow() external view returns (uint256 maxNow) {
+        if (status != Status.Open) return 0;
+        if (block.timestamp >= deadline) return 0;
+
+        uint256 sold = getSold();
+        uint256 cap = HARD_CAP_TICKETS;
+
+        if (maxTickets > 0 && uint256(maxTickets) < cap) cap = uint256(maxTickets);
+        if (sold >= cap) return 0;
+
+        uint256 remain = cap - sold;
+        maxNow = remain > MAX_BATCH_BUY ? MAX_BATCH_BUY : remain;
+    }
+
+    function timeLeft() external view returns (uint256) {
+        if (block.timestamp >= deadline) return 0;
+        return uint256(deadline) - block.timestamp;
+    }
+
+    /// @notice Current fee required to call finalize() successfully (for the configured callbackGasLimit).
+    function getFinalizeFee() public view returns (uint256) {
+        return entropy.getFeeV2(callbackGasLimit);
+    }
+
+    /// @notice Convenience finalize wrapper: requires exact fee (no refunds, clean wallet UX).
+    function finalizeExact() external payable nonReentrant {
+        uint256 fee = getFinalizeFee();
+        if (msg.value != fee) revert InsufficientFee();
+        _finalizeInternal(fee, fee);
+    }
+
+    /// @notice Convenience finalize wrapper: protects user from fee spikes above maxFee. Refunds overpay as usual.
+    function finalizeWithMaxFee(uint256 maxFee) external payable nonReentrant {
+        uint256 fee = getFinalizeFee();
+        if (fee > maxFee) revert InsufficientFee();
+        if (msg.value < fee) revert InsufficientFee();
+        _finalizeInternal(fee, msg.value);
+    }
+
+    /// @notice Paginated getter for ticket ranges (client-friendly: two arrays).
+    function getTicketRanges(uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory buyers, uint96[] memory upperBounds)
+    {
+        uint256 n = ticketRanges.length;
+        if (start >= n || limit == 0) return (new address, new uint96);
+
+        uint256 end = start + limit;
+        if (end > n) end = n;
+
+        buyers = new address[](end - start);
+        upperBounds = new uint96[](end - start);
+
+        for (uint256 i = start; i < end; i++) {
+            TicketRange storage r = ticketRanges[i];
+            buyers[i - start] = r.buyer;
+            upperBounds[i - start] = r.upperBound;
+        }
+    }
+
+    function getTicketRangesCount() external view returns (uint256) {
+        return ticketRanges.length;
+    }
+
+    /// @notice Canonical accounting snapshot for UIs/auditors.
+    function getAccounting()
+        external
+        view
+        returns (
+            uint256 reservedUSDC,
+            uint256 usdcBalance,
+            uint256 excessUSDC,
+            uint256 claimableNativeTotal,
+            uint256 nativeBalance
+        )
+    {
+        reservedUSDC = totalReservedUSDC;
+        usdcBalance = usdcToken.balanceOf(address(this));
+        excessUSDC = usdcBalance > reservedUSDC ? (usdcBalance - reservedUSDC) : 0;
+        claimableNativeTotal = totalClaimableNative;
+        nativeBalance = address(this).balance;
+    }
+
+    /// @notice Public verifier wrapper for the winner search logic.
+    function findWinner(uint256 ticketIndex) external view returns (address) {
+        uint256 sold = getSold();
+        if (sold == 0 || ticketIndex >= sold) revert InvalidCount();
+        return _findWinner(ticketIndex);
+    }
+
+    /// @notice Expose the current minimum required to CREATE a new range (not counting "returning buyer" case).
+    function currentNewRangeMin() external view returns (uint256 required) {
+        required = _minTicketsForNewRange();
+        if (minPurchaseAmount > required) required = minPurchaseAmount;
+    }
+
     // ----- Range throttling helpers -----
 
     function _minTicketsForNewRange() internal view returns (uint256) {
@@ -257,8 +410,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (newTotal > HARD_CAP_TICKETS) revert TicketLimitReached();
         if (maxTickets > 0 && newTotal > maxTickets) revert TicketLimitReached();
 
-        bool returning =
-            (ticketRanges.length > 0 && ticketRanges[ticketRanges.length - 1].buyer == msg.sender);
+        bool returning = (ticketRanges.length > 0 && ticketRanges[ticketRanges.length - 1].buyer == msg.sender);
 
         // Throttle only when this buy would create a NEW range
         if (!returning) {
@@ -297,7 +449,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
+    // --- finalize wrappers now call into this internal function ---
+
     function finalize() external payable nonReentrant {
+        // preserve original behavior
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
@@ -315,24 +470,44 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (sold == 0) revert NoParticipants();
 
+        uint256 fee = getFinalizeFee();
+        if (msg.value < fee) revert InsufficientFee();
+
+        _finalizeInternal(fee, msg.value);
+    }
+
+    function _finalizeInternal(uint256 fee, uint256 paid) internal {
+        // Preconditions duplicated lightly to keep wrappers consistent.
+        if (status != Status.Open) revert LotteryNotOpen();
+        if (entropyRequestId != 0) revert RequestPending();
+
+        uint256 sold = getSold();
+        bool isFull = (maxTickets > 0 && sold >= maxTickets);
+        bool isExpiredNow = (block.timestamp >= deadline);
+
+        if (!isFull && !isExpiredNow) revert NotReadyToFinalize();
+
+        if (isExpiredNow && sold < minTickets) {
+            _cancelAndRefundCreator("Min tickets not reached");
+            if (paid > 0) _safeNativeTransfer(msg.sender, paid);
+            return;
+        }
+
+        if (sold == 0) revert NoParticipants();
+
         status = Status.Drawing;
         soldAtDrawing = sold;
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
 
-        uint256 fee = entropy.getFeeV2(callbackGasLimit);
-        if (msg.value < fee) revert InsufficientFee();
-
-        bytes32 userRand = keccak256(
-            abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1))
-        );
+        bytes32 userRand = keccak256(abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1)));
 
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
         entropyRequestId = requestId;
 
-        if (msg.value > fee) _safeNativeTransfer(msg.sender, msg.value - fee);
+        if (paid > fee) _safeNativeTransfer(msg.sender, paid - fee);
 
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
