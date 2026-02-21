@@ -7,11 +7,12 @@ contract LotteryRegistry {
     error AlreadyRegistered();
     error InvalidTypeId();
     error NotContract();
+    error RegistrarAlreadySet();
 
+    event RegistrarLocked(address indexed registrar);
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
-    /// @notice The only address allowed to register lotteries (intended: your SingleWinnerDeployer).
-    address public immutable registrar;
+    address public registrar; // starts unset (0), then locked forever
 
     address[] public allLotteries;
     mapping(address => uint256) public typeIdOf; // 0 = not registered
@@ -24,14 +25,19 @@ contract LotteryRegistry {
         _;
     }
 
-    constructor(address _registrar) {
+    constructor() {}
+
+    /// @notice One-time wiring: set registrar exactly once, then it is immutable in practice.
+    function lockRegistrar(address _registrar) external {
         if (_registrar == address(0)) revert ZeroAddress();
+        if (registrar != address(0)) revert RegistrarAlreadySet();
         registrar = _registrar;
+        emit RegistrarLocked(_registrar);
     }
 
-    /// @notice Kept for compatibility with your existing deployer check.
+    /// @notice Kept for compatibility with your deployer’s check.
     function isRegistrar(address who) external view returns (bool) {
-        return who == registrar;
+        return who != address(0) && who == registrar;
     }
 
     function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
@@ -50,6 +56,7 @@ contract LotteryRegistry {
         emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
     }
 
+    // view helpers unchanged...
     function isRegisteredLottery(address lottery) external view returns (bool) {
         return typeIdOf[lottery] != 0;
     }
@@ -68,32 +75,24 @@ contract LotteryRegistry {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
 
         page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = allLotteries[i];
-        }
+        for (uint256 i = start; i < end; i++) page[i - start] = allLotteries[i];
     }
 
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit)
-        external
-        view
-        returns (address[] memory page)
-    {
+    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
 
         page = new address[](end - start);
-        for (uint256 i = start; i < end; i++) {
-            page[i - start] = arr[i];
-        }
+        for (uint256 i = start; i < end; i++) page[i - start] = arr[i];
     }
 }
