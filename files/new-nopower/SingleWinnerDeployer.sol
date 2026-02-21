@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -9,7 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./LotteryRegistry.sol";
 import "./SingleWinnerLottery.sol";
 
-contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
+contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error ZeroAddress();
@@ -35,8 +34,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 maxTickets
     );
 
-    event FeeConfigUpdated(address indexed feeRecipient, uint256 protocolFeePercent);
-
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
     LotteryRegistry public immutable registry;
@@ -46,12 +43,11 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
-    // fee config (mutable, only affects NEW lotteries)
-    address public feeRecipient;
-    uint256 public protocolFeePercent;
+    // fee config is immutable (no owner power; only affects NEW lotteries like before)
+    address public immutable feeRecipient;
+    uint256 public immutable protocolFeePercent;
 
     constructor(
-        address initialOwner,
         address _registry,
         address _usdc,
         address _entropy,
@@ -59,9 +55,8 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint32 _callbackGasLimit,
         address _feeRecipient,
         uint256 _protocolFeePercent
-    ) Ownable(initialOwner) {
+    ) {
         if (
-            initialOwner == address(0) ||
             _registry == address(0) ||
             _usdc == address(0) ||
             _entropy == address(0) ||
@@ -81,18 +76,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-
-        emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
-    }
-
-    function setFeeConfig(address _feeRecipient, uint256 _protocolFeePercent) external onlyOwner {
-        if (_feeRecipient == address(0)) revert ZeroAddress();
-        if (_protocolFeePercent > 20) revert FeeTooHigh();
-
-        feeRecipient = _feeRecipient;
-        protocolFeePercent = _protocolFeePercent;
-
-        emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
     }
 
     function createSingleWinnerLottery(
@@ -104,18 +87,16 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 durationSeconds,
         uint32 minPurchaseAmount
     ) external nonReentrant returns (address lotteryAddr) {
+        // keep your existing gating semantics
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
-
-        address feeRecipientSnapshot = feeRecipient;
-        uint256 protocolFeePercentSnapshot = protocolFeePercent;
 
         SingleWinnerLottery.LotteryParams memory params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
             entropyProvider: entropyProvider,
             callbackGasLimit: callbackGasLimit,
-            feeRecipient: feeRecipientSnapshot,
-            protocolFeePercent: protocolFeePercentSnapshot,
+            feeRecipient: feeRecipient,
+            protocolFeePercent: protocolFeePercent,
             creator: msg.sender,
             name: name,
             ticketPrice: ticketPrice,
@@ -150,8 +131,8 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
             entropy,
             entropyProvider,
             callbackGasLimit,
-            feeRecipientSnapshot,
-            protocolFeePercentSnapshot,
+            feeRecipient,
+            protocolFeePercent,
             dl,
             minTickets,
             maxTickets
