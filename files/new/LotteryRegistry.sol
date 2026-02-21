@@ -29,6 +29,7 @@ contract LotteryRegistry is Ownable2Step {
         if (initialOwner == address(0)) revert ZeroAddress();
     }
 
+    /// @notice Owner can add/remove deployer(s) at any time (affects only NEW registrations).
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
         if (authorized && registrar == address(0)) revert ZeroAddress();
         isRegistrar[registrar] = authorized;
@@ -69,7 +70,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -83,7 +84,7 @@ contract LotteryRegistry is Ownable2Step {
     function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
