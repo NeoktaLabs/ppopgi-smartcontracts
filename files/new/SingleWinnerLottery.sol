@@ -44,7 +44,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error InvalidPot();
     error InvalidMinTickets();
     error MaxLessThanMin();
-    error BatchTooCheap();
     error InvalidCallbackGasLimit();
 
     error NotFundingPending();
@@ -62,6 +61,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error Overflow();
     error UnexpectedTransferAmount();
 
+    // New range throttle
+    error NewRangeMinNotMet(uint256 required, uint256 provided);
+
     error RequestPending();
     error NotReadyToFinalize();
     error NoParticipants();
@@ -71,7 +73,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error UnauthorizedCallback();
     error NotDrawing();
     error CannotCancel();
-    error NotCanceled();
     error EarlyCancellationRequest();
     error EmergencyHatchLocked();
 
@@ -112,8 +113,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint256 public immutable protocolFeePercent;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
-    uint256 public constant MAX_RANGES = 20_000;
-    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
+    uint256 public constant MAX_RANGES = 100_000; // increased for big raffles
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
@@ -144,7 +144,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint64 public drawingRequestedAt;
     uint64 public entropyRequestId;
     uint256 public soldAtDrawing;
-
 
     uint256 public soldAtCancel;
     uint64 public canceledAt;
@@ -180,10 +179,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.minTickets == 0) revert InvalidMinTickets();
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
-
-        uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
-        uint256 requiredMinPrice = (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry;
-        if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
 
         usdcToken = IERC20(params.usdcToken);
         entropy = IEntropyV2(params.entropy);
@@ -221,12 +216,38 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit FundingConfirmed(msg.sender, winningPot);
     }
 
+    // ----- Range throttling helpers -----
+
+    function _minTicketsForNewRange() internal view returns (uint256) {
+        uint256 r = ticketRanges.length;
+        if (r < 10_000) return 1;
+        if (r < 25_000) return 2;
+        if (r < 50_000) return 5;
+        if (r < 75_000) return 10;
+        return 20;
+    }
+
+    /// @notice Minimum tickets the given user must buy *right now* (based on range throttling + minPurchaseAmount).
+    function minTicketsToBuy(address user) external view returns (uint256 required) {
+        required = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
+
+        uint256 len = ticketRanges.length;
+        bool returning = (len > 0 && ticketRanges[len - 1].buyer == user);
+
+        if (!returning) {
+            uint256 newMin = _minTicketsForNewRange();
+            if (newMin > required) required = newMin;
+        }
+    }
+
     function buyTickets(uint256 count) external nonReentrant {
         if (status != Status.Open) revert LotteryNotOpen();
         if (count == 0) revert InvalidCount();
         if (count > MAX_BATCH_BUY) revert BatchTooLarge();
         if (block.timestamp >= deadline) revert LotteryExpired();
         if (msg.sender == creator) revert CreatorCannotBuy();
+
+        // Keep creator-configured minimum for everyone
         if (minPurchaseAmount > 0 && count < minPurchaseAmount) revert BatchTooSmall();
 
         uint256 currentSold = getSold();
@@ -236,15 +257,20 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (newTotal > HARD_CAP_TICKETS) revert TicketLimitReached();
         if (maxTickets > 0 && newTotal > maxTickets) revert TicketLimitReached();
 
-        uint256 totalCost = ticketPrice * count;
-
         bool returning =
             (ticketRanges.length > 0 && ticketRanges[ticketRanges.length - 1].buyer == msg.sender);
 
+        // Throttle only when this buy would create a NEW range
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
-            if (totalCost < MIN_NEW_RANGE_COST) revert BatchTooCheap();
+
+            uint256 required = _minTicketsForNewRange();
+            if (minPurchaseAmount > required) required = minPurchaseAmount;
+
+            if (count < required) revert NewRangeMinNotMet(required, count);
         }
+
+        uint256 totalCost = ticketPrice * count;
 
         uint256 rangeIndex;
         bool isNewRange;
@@ -258,7 +284,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
             rangeIndex = ticketRanges.length - 1;
             isNewRange = true;
         }
-
 
         totalReservedUSDC += totalCost;
         ticketRevenue += totalCost;
@@ -379,7 +404,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketRanges[low].buyer;
     }
 
-
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
 
@@ -428,10 +452,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
+        // Ticket refunds are implicit on cancel: just call withdrawFunds()
         if (status == Status.Canceled) {
             uint256 tix = ticketsOwned[msg.sender];
             if (tix > 0) {
@@ -466,9 +490,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    function withdrawNative() external nonReentrant {
-        withdrawNativeTo(msg.sender);
-    }
+    function withdrawNative() external nonReentrant { withdrawNativeTo(msg.sender); }
 
     function withdrawNativeTo(address to) public nonReentrant {
         if (to == address(0)) revert ZeroAddress();
