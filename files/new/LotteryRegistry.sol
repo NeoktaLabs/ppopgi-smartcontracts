@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-// Pinned compiler version to avoid compilation with older/vulnerable solc versions.
 pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
@@ -15,9 +14,9 @@ contract LotteryRegistry is Ownable2Step {
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;          // 0 = not registered
+    mapping(address => uint256) public typeIdOf;
     mapping(address => address) public creatorOf;
-    mapping(address => uint64) public registeredAt;       // uint64 timestamp is safe for practical timelines
+    mapping(address => uint64) public registeredAt;
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
@@ -30,20 +29,12 @@ contract LotteryRegistry is Ownable2Step {
         if (initialOwner == address(0)) revert ZeroAddress();
     }
 
-    /**
-     * @notice Authorize or deauthorize a registrar.
-     * @dev Allow disabling any registrar. Only require nonzero address when authorizing.
-     */
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
         if (authorized && registrar == address(0)) revert ZeroAddress();
         isRegistrar[registrar] = authorized;
         emit RegistrarSet(registrar, authorized);
     }
 
-    /**
-     * @notice Register a new lottery instance.
-     * @dev Only callable by authorized registrars (e.g., a deployer contract).
-     */
     function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
         if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();

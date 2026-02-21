@@ -6,42 +6,31 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-/**
- * @title SingleWinnerLottery
- * @notice Single-winner lottery with Entropy (Pyth) randomness.
- *
- * Governance model: NONE.
- * - No owner, no admin setters, no pause, no sweeping.
- * - All configuration is immutable after deployment.
- * - If something goes wrong upstream (entropy/provider/gas), the mitigation is redeploy.
- */
 contract SingleWinnerLottery is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ---------- Types ----------
     struct LotteryParams {
         address usdcToken;
-        address entropy;            // Entropy contract (v2)
-        address entropyProvider;    // provider address (usually default provider)
-        uint32 callbackGasLimit;    // callback gas limit for entropy callback
+        address entropy;
+        address entropyProvider;
+        uint32 callbackGasLimit;
         address feeRecipient;
-        uint256 protocolFeePercent; // 0..20
+        uint256 protocolFeePercent;
         address creator;
         string name;
         uint256 ticketPrice;
         uint256 winningPot;
         uint64 minTickets;
-        uint64 maxTickets;          // 0 = no max (still capped by HARD_CAP_TICKETS)
+        uint64 maxTickets;
         uint64 durationSeconds;
-        uint32 minPurchaseAmount;   // 0 = no minimum
+        uint32 minPurchaseAmount;
     }
 
     struct TicketRange {
         address buyer;
-        uint96 upperBound; // inclusive upper bound of sold tickets count (monotonic increasing)
+        uint96 upperBound;
     }
 
-    // ---------- Errors ----------
     error InvalidEntropy();
     error InvalidProvider();
     error InvalidUSDC();
@@ -91,7 +80,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error ZeroAddress();
     error AccountingMismatch();
 
-    // ---------- Events ----------
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(
         address indexed buyer,
@@ -106,7 +94,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     event LotteryCanceled(string reason, uint256 sold, uint256 ticketRevenue, uint256 potRefund);
     event EmergencyRecovery();
 
-    event RefundAllocated(address indexed user, uint256 amount); // emitted for ticket refunds and pot refunds
+    event RefundAllocated(address indexed user, uint256 amount);
     event FundsClaimed(address indexed user, uint256 amount);
     event NativeRefundAllocated(address indexed user, uint256 amount);
     event NativeClaimed(address indexed to, uint256 amount);
@@ -114,7 +102,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
     event FundingConfirmed(address indexed caller, uint256 expectedPot);
 
-    // ---------- Immutable config ----------
     IERC20 public immutable usdcToken;
     IEntropyV2 public immutable entropy;
     address public immutable entropyProvider;
@@ -124,18 +111,16 @@ contract SingleWinnerLottery is ReentrancyGuard {
     address public immutable feeRecipient;
     uint256 public immutable protocolFeePercent;
 
-    // ---------- Constants ----------
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MAX_RANGES = 20_000;
-    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
+    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
-    uint256 public constant PRIVILEGED_HATCH_DELAY = 1 days; // used only for creator (non-governance) cancel path
+    uint256 public constant PRIVILEGED_HATCH_DELAY = 1 days;
     uint256 public constant PUBLIC_HATCH_DELAY = 7 days;
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
-    // ---------- State ----------
     enum Status { FundingPending, Open, Drawing, Completed, Canceled }
     Status public status;
 
@@ -151,28 +136,24 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint64 public maxTickets;
     uint32 public minPurchaseAmount;
 
-    // accounting
-    uint256 public totalReservedUSDC;      // amount the contract owes users in USDC (claimable)
-    uint256 public totalClaimableNative;   // total outstanding native-coin refunds/claims
+    uint256 public totalReservedUSDC;
+    uint256 public totalClaimableNative;
 
-    // drawing / winner
     address public winner;
     address public selectedProvider;
     uint64 public drawingRequestedAt;
     uint64 public entropyRequestId;
     uint256 public soldAtDrawing;
 
-    // cancel snapshot
+
     uint256 public soldAtCancel;
     uint64 public canceledAt;
 
-    // tickets
     TicketRange[] public ticketRanges;
     mapping(address => uint256) public ticketsOwned;
 
-    // claims
-    mapping(address => uint256) public claimableFunds;  // USDC claims (winner/creator/fees + pot refund)
-    mapping(address => uint256) public claimableNative; // native refunds when a call refund fails
+    mapping(address => uint256) public claimableFunds;
+    mapping(address => uint256) public claimableNative;
 
     bool public creatorPotRefunded;
 
@@ -185,7 +166,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
-        // Enforce "USDC-like" 6 decimals
         try IERC20Metadata(params.usdcToken).decimals() returns (uint8 d) {
             if (d != 6) revert InvalidUSDC();
         } catch {
@@ -201,7 +181,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
-        // Ensure any new range purchase meets minimum cost threshold
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry;
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -228,17 +207,12 @@ contract SingleWinnerLottery is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
-    /**
-     * @notice Confirms the lottery is funded with at least winningPot USDC and opens it.
-     * @dev No privileged role: anyone can call once the USDC is present.
-     */
     function confirmFunding() external {
         if (status != Status.FundingPending) revert NotFundingPending();
 
         uint256 bal = usdcToken.balanceOf(address(this));
         if (bal < winningPot) revert FundingMismatch();
 
-        // prevent double-confirm
         if (totalReservedUSDC != 0) revert AlreadyFunded();
 
         totalReservedUSDC = winningPot;
@@ -275,7 +249,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint256 rangeIndex;
         bool isNewRange;
 
-        // Effects: update ranges first
         if (returning) {
             rangeIndex = ticketRanges.length - 1;
             isNewRange = false;
@@ -286,14 +259,13 @@ contract SingleWinnerLottery is ReentrancyGuard {
             isNewRange = true;
         }
 
-        // Effects: accounting
+
         totalReservedUSDC += totalCost;
         ticketRevenue += totalCost;
         ticketsOwned[msg.sender] += count;
 
         emit TicketsPurchased(msg.sender, count, totalCost, newTotal, rangeIndex, isNewRange);
 
-        // Interaction: pull USDC and verify exact amount received
         uint256 balBefore = usdcToken.balanceOf(address(this));
         usdcToken.safeTransferFrom(msg.sender, address(this), totalCost);
         uint256 balAfter = usdcToken.balanceOf(address(this));
@@ -310,7 +282,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
-        // Expired with insufficient participation => cancel
         if (isExpired && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
             if (msg.value > 0) _safeNativeTransfer(msg.sender, msg.value);
@@ -327,7 +298,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value < fee) revert InsufficientFee();
 
-        // userRand is a salt; security comes from Entropy provider randomness.
         bytes32 userRand = keccak256(
             abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1))
         );
@@ -342,9 +312,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
-    /**
-     * @dev Entropy calls this function name/signature on the consumer.
-     */
     function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
         if (msg.sender != address(entropy)) revert UnauthorizedCallback();
 
@@ -365,10 +332,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (total == 0) revert NoParticipants();
 
         uint256 len = ticketRanges.length;
-        // Ensure last upperBound matches soldAtDrawing snapshot
         if (len == 0 || uint256(ticketRanges[len - 1].upperBound) != total) revert AccountingMismatch();
 
-        // Clear drawing state
         entropyRequestId = 0;
         soldAtDrawing = 0;
         drawingRequestedAt = 0;
@@ -380,7 +345,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         winner = w;
         status = Status.Completed;
 
-        // Fees
         uint256 feePot = (winningPot * protocolFeePercent) / 100;
         uint256 feeRev = (ticketRevenue * protocolFeePercent) / 100;
 
@@ -388,7 +352,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint256 creatorNet = ticketRevenue - feeRev;
         uint256 protocolAmount = feePot + feeRev;
 
-        // Allocate pull-based claims
         claimableFunds[w] += winnerAmount;
         emit PrizeAllocated(w, winnerAmount, 1);
 
@@ -416,10 +379,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketRanges[low].buyer;
     }
 
-    /**
-     * @notice Emergency hatch: cancel if randomness is stuck.
-     * @dev Creator can cancel after 1 day; anyone after 7 days.
-     */
+
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
 
@@ -450,7 +410,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         status = Status.Canceled;
 
-        // clear drawing state (if any)
         selectedProvider = address(0);
         drawingRequestedAt = 0;
         entropyRequestId = 0;
@@ -461,7 +420,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
             creatorPotRefunded = true;
             potRefund = winningPot;
 
-            // creator can pull pot back
             claimableFunds[creator] += winningPot;
             emit PrizeAllocated(creator, winningPot, 5);
             emit RefundAllocated(creator, winningPot);
@@ -470,20 +428,13 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-    /**
-     * @notice Single-step withdraw for ALL USDC claims:
-     * - winner/creator/feeRecipient claims (Completed)
-     * - creator pot refund (Canceled)
-     * - ticket refunds (Canceled) are computed lazily here so users only call withdrawFunds().
-     */
+
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
-        // If canceled, include ticket refund automatically (no separate "claim refund" step).
         if (status == Status.Canceled) {
             uint256 tix = ticketsOwned[msg.sender];
             if (tix > 0) {
-                // Effects first to prevent double-refund
                 ticketsOwned[msg.sender] = 0;
 
                 uint256 refund = tix * ticketPrice;
@@ -496,13 +447,11 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (amount == 0) revert NothingToClaim();
 
-        // Effects
         claimableFunds[msg.sender] = 0;
 
         if (totalReservedUSDC < amount) revert AccountingMismatch();
         totalReservedUSDC -= amount;
 
-        // Interaction
         usdcToken.safeTransfer(msg.sender, amount);
 
         emit FundsClaimed(msg.sender, amount);
@@ -541,6 +490,5 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return len == 0 ? 0 : uint256(ticketRanges[len - 1].upperBound);
     }
 
-    // Needed to receive ETH for entropy fee refunds and any direct native transfers.
     receive() external payable {}
 }

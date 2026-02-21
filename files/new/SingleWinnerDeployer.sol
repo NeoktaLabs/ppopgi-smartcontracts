@@ -9,14 +9,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./LotteryRegistry.sol";
 import "./SingleWinnerLottery.sol";
 
-/**
- * @title SingleWinnerDeployer
- * @notice Deploys SingleWinnerLottery instances.
- *
- * Governance scope:
- * - Owner can update feeRecipient and protocolFeePercent ONLY for future deployments.
- * - Deployed lotteries store feeRecipient/protocolFeePercent as immutables and cannot be changed.
- */
 contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -49,13 +41,11 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
     LotteryRegistry public immutable registry;
 
-    // fixed config (immutable)
     address public immutable usdc;
     address public immutable entropy;
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
-    // fee config (mutable, only affects NEW lotteries)
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
@@ -94,10 +84,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
     }
 
-    /**
-     * @notice Updates the fee config used ONLY for future deployments.
-     * @dev Does not affect any already deployed lotteries.
-     */
     function setFeeConfig(address _feeRecipient, uint256 _protocolFeePercent) external onlyOwner {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -119,7 +105,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     ) external nonReentrant returns (address lotteryAddr) {
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
-        // Snapshot fee config at deployment time (this is the key property you want)
         address feeRecipientSnapshot = feeRecipient;
         uint256 protocolFeePercentSnapshot = protocolFeePercent;
 
@@ -143,14 +128,12 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         SingleWinnerLottery lot = new SingleWinnerLottery(params);
         lotteryAddr = address(lot);
 
-        // Fund pot (creator pays) then open
         IERC20(usdc).safeTransferFrom(msg.sender, lotteryAddr, winningPot);
         lot.confirmFunding();
 
         uint64 dl = lot.deadline();
 
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
-            // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
         }
