@@ -14,7 +14,7 @@ contract LotteryRegistry is Ownable2Step {
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;     // 0 = not registered
+    mapping(address => uint256) public typeIdOf; // 0 = not registered
     mapping(address => address) public creatorOf;
     mapping(address => uint64) public registeredAt;
     mapping(uint256 => address[]) internal lotteriesByType;
@@ -66,6 +66,18 @@ contract LotteryRegistry is Ownable2Step {
 
     function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
         return lotteriesByType[typeId][index];
+    }
+
+    /// @notice Convenience: single-call info fetch for UIs/scripts.
+    function getLotteryInfo(address lottery)
+        external
+        view
+        returns (uint256 typeId, address creator, uint64 registeredAtTs, bool isRegistered)
+    {
+        typeId = typeIdOf[lottery];
+        creator = creatorOf[lottery];
+        registeredAtTs = registeredAt[lottery];
+        isRegistered = (typeId != 0);
     }
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
