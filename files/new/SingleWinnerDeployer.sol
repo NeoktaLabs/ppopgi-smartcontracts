@@ -46,6 +46,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
+    // fee config (mutable, only affects NEW lotteries)
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
@@ -134,6 +135,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 dl = lot.deadline();
 
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
+            // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
         }
