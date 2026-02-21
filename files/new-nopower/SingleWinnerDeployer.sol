@@ -43,7 +43,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
-    // fee config is immutable (no owner power; only affects NEW lotteries like before)
+    // Immutable fee config (no owner power; only affects NEW lotteries)
     address public immutable feeRecipient;
     uint256 public immutable protocolFeePercent;
 
@@ -87,7 +87,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 durationSeconds,
         uint32 minPurchaseAmount
     ) external nonReentrant returns (address lotteryAddr) {
-        // keep your existing gating semantics
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
         SingleWinnerLottery.LotteryParams memory params = SingleWinnerLottery.LotteryParams({
