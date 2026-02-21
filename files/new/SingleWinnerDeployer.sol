@@ -36,17 +36,19 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     );
 
     event FeeConfigUpdated(address indexed feeRecipient, uint256 protocolFeePercent);
+    event EntropyConfigUpdated(address indexed entropy, address indexed entropyProvider);
 
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
     LotteryRegistry public immutable registry;
 
     address public immutable usdc;
-    address public immutable entropy;
-    address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
-    // fee config (mutable, only affects NEW lotteries)
+    // ---- mutable configs (only affect NEW lotteries) ----
+    address public entropy;
+    address public entropyProvider;
+
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
@@ -75,16 +77,18 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         registry = LotteryRegistry(_registry);
 
         usdc = _usdc;
+        callbackGasLimit = _callbackGasLimit;
+
         entropy = _entropy;
         entropyProvider = _entropyProvider;
-        callbackGasLimit = _callbackGasLimit;
+        emit EntropyConfigUpdated(_entropy, _entropyProvider);
 
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-
         emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
     }
 
+    /// @notice Updates protocol fees for NEW lotteries only.
     function setFeeConfig(address _feeRecipient, uint256 _protocolFeePercent) external onlyOwner {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -93,6 +97,14 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         protocolFeePercent = _protocolFeePercent;
 
         emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
+    }
+
+    /// @notice Updates Entropy contract + provider for NEW lotteries only.
+    function setEntropyConfig(address _entropy, address _entropyProvider) external onlyOwner {
+        if (_entropy == address(0) || _entropyProvider == address(0)) revert ZeroAddress();
+        entropy = _entropy;
+        entropyProvider = _entropyProvider;
+        emit EntropyConfigUpdated(_entropy, _entropyProvider);
     }
 
     function createSingleWinnerLottery(
@@ -106,13 +118,16 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     ) external nonReentrant returns (address lotteryAddr) {
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
+        // snapshot mutable config for this lottery (so later changes don't affect it)
+        address entropySnapshot = entropy;
+        address entropyProviderSnapshot = entropyProvider;
         address feeRecipientSnapshot = feeRecipient;
         uint256 protocolFeePercentSnapshot = protocolFeePercent;
 
         SingleWinnerLottery.LotteryParams memory params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
-            entropy: entropy,
-            entropyProvider: entropyProvider,
+            entropy: entropySnapshot,
+            entropyProvider: entropyProviderSnapshot,
             callbackGasLimit: callbackGasLimit,
             feeRecipient: feeRecipientSnapshot,
             protocolFeePercent: protocolFeePercentSnapshot,
@@ -147,8 +162,8 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
             ticketPrice,
             name,
             usdc,
-            entropy,
-            entropyProvider,
+            entropySnapshot,
+            entropyProviderSnapshot,
             callbackGasLimit,
             feeRecipientSnapshot,
             protocolFeePercentSnapshot,
