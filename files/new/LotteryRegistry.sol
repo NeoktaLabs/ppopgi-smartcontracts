@@ -4,14 +4,6 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
-/**
- * @title LotteryRegistry
- * @notice A minimal, “forever” on-chain registry for lottery instances.
- *
- * Scan-friendly notes:
- * - Uses Ownable2Step to make ownership transfers safer and reduce "ownership retrieval" heuristics.
- * - Owner powers are limited to managing authorized registrars and initiating ownership transfers.
- */
 contract LotteryRegistry is Ownable2Step {
     error ZeroAddress();
     error NotRegistrar();
