@@ -67,8 +67,12 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error RequestPending();
     error NotReadyToFinalize();
     error NoParticipants();
-    error InsufficientFee();
+    error InsufficientFee(); // kept for finalize() legacy behavior
     error InvalidRequest();
+
+    // New: better UX errors for finalize wrappers
+    error InvalidFeeAmount(uint256 required, uint256 provided);
+    error FeeExceedsMax(uint256 fee, uint256 maxFee);
 
     error UnauthorizedCallback();
     error NotDrawing();
@@ -299,15 +303,15 @@ contract SingleWinnerLottery is ReentrancyGuard {
     /// @notice Convenience finalize wrapper: requires exact fee (no refunds, clean wallet UX).
     function finalizeExact() external payable nonReentrant {
         uint256 fee = getFinalizeFee();
-        if (msg.value != fee) revert InsufficientFee();
-        _finalizeInternal(fee, fee);
+        if (msg.value != fee) revert InvalidFeeAmount(fee, msg.value);
+        _finalizeInternal(fee, msg.value);
     }
 
     /// @notice Convenience finalize wrapper: protects user from fee spikes above maxFee. Refunds overpay as usual.
     function finalizeWithMaxFee(uint256 maxFee) external payable nonReentrant {
         uint256 fee = getFinalizeFee();
-        if (fee > maxFee) revert InsufficientFee();
-        if (msg.value < fee) revert InsufficientFee();
+        if (fee > maxFee) revert FeeExceedsMax(fee, maxFee);
+        if (msg.value < fee) revert InvalidFeeAmount(fee, msg.value);
         _finalizeInternal(fee, msg.value);
     }
 
@@ -318,6 +322,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
+
+        // ✅ FIX: must return empty dynamic arrays, not `new address` / `new uint96`
         if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
@@ -500,7 +506,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
 
-        bytes32 userRand = keccak256(abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1)));
+        bytes32 userRand =
+            keccak256(abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1)));
 
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
@@ -665,7 +672,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    function withdrawNative() external nonReentrant { withdrawNativeTo(msg.sender); }
+    function withdrawNative() external nonReentrant {
+        withdrawNativeTo(msg.sender);
+    }
 
     function withdrawNativeTo(address to) public nonReentrant {
         if (to == address(0)) revert ZeroAddress();
