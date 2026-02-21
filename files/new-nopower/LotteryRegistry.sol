@@ -12,10 +12,10 @@ contract LotteryRegistry {
     event RegistrarLocked(address indexed registrar);
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
-    address public registrar; // starts unset (0), then locked forever
+    address public registrar;
 
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf; // 0 = not registered
+    mapping(address => uint256) public typeIdOf;
     mapping(address => address) public creatorOf;
     mapping(address => uint64) public registeredAt;
     mapping(uint256 => address[]) internal lotteriesByType;
@@ -27,7 +27,6 @@ contract LotteryRegistry {
 
     constructor() {}
 
-    /// @notice One-time wiring: set registrar exactly once, then it is immutable in practice.
     function lockRegistrar(address _registrar) external {
         if (_registrar == address(0)) revert ZeroAddress();
         if (registrar != address(0)) revert RegistrarAlreadySet();
@@ -35,7 +34,6 @@ contract LotteryRegistry {
         emit RegistrarLocked(_registrar);
     }
 
-    /// @notice Kept for compatibility with your deployer’s check.
     function isRegistrar(address who) external view returns (bool) {
         return who != address(0) && who == registrar;
     }
@@ -50,27 +48,9 @@ contract LotteryRegistry {
         typeIdOf[lottery] = typeId;
         creatorOf[lottery] = creator;
         registeredAt[lottery] = uint64(block.timestamp);
-
         lotteriesByType[typeId].push(lottery);
 
         emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
-    }
-
-    // view helpers unchanged...
-    function isRegisteredLottery(address lottery) external view returns (bool) {
-        return typeIdOf[lottery] != 0;
-    }
-
-    function getAllLotteriesCount() external view returns (uint256) {
-        return allLotteries.length;
-    }
-
-    function getLotteriesByTypeCount(uint256 typeId) external view returns (uint256) {
-        return lotteriesByType[typeId].length;
-    }
-
-    function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
-        return lotteriesByType[typeId][index];
     }
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
