@@ -107,6 +107,62 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit EntropyConfigUpdated(_entropy, _entropyProvider);
     }
 
+    /// @notice Convenience view for frontends: current deployer settings used for NEW lotteries.
+    function getCurrentConfig()
+        external
+        view
+        returns (
+            address registryAddr,
+            address usdcToken,
+            address entropyAddr,
+            address entropyProviderAddr,
+            uint32 cbGasLimit,
+            address currentFeeRecipient,
+            uint256 currentProtocolFeePercent
+        )
+    {
+        return (
+            address(registry),
+            usdc,
+            entropy,
+            entropyProvider,
+            callbackGasLimit,
+            feeRecipient,
+            protocolFeePercent
+        );
+    }
+
+    /// @notice Convenience view for frontends: exact params that WOULD be used if a lottery were created now.
+    /// @dev `creator` is passed explicitly so UIs can preview for any address.
+    function previewLotteryParams(
+        address creator,
+        string calldata name,
+        uint256 ticketPrice,
+        uint256 winningPot,
+        uint64 minTickets,
+        uint64 maxTickets,
+        uint64 durationSeconds,
+        uint32 minPurchaseAmount
+    ) external view returns (SingleWinnerLottery.LotteryParams memory params) {
+        // same values as createSingleWinnerLottery snapshots
+        params = SingleWinnerLottery.LotteryParams({
+            usdcToken: usdc,
+            entropy: entropy,
+            entropyProvider: entropyProvider,
+            callbackGasLimit: callbackGasLimit,
+            feeRecipient: feeRecipient,
+            protocolFeePercent: protocolFeePercent,
+            creator: creator,
+            name: name,
+            ticketPrice: ticketPrice,
+            winningPot: winningPot,
+            minTickets: minTickets,
+            maxTickets: maxTickets,
+            durationSeconds: durationSeconds,
+            minPurchaseAmount: minPurchaseAmount
+        });
+    }
+
     function createSingleWinnerLottery(
         string calldata name,
         uint256 ticketPrice,
