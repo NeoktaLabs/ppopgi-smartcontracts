@@ -14,7 +14,7 @@ contract LotteryRegistry is Ownable2Step {
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address[] public allLotteries;
-    mapping(address => uint256) public typeIdOf;
+    mapping(address => uint256) public typeIdOf;     // 0 = not registered
     mapping(address => address) public creatorOf;
     mapping(address => uint64) public registeredAt;
     mapping(uint256 => address[]) internal lotteriesByType;
