@@ -316,8 +316,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
 
-        // ✅ FIX: must return empty dynamic arrays
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -369,7 +368,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     // Added UX/indexer helpers
     // =========================
 
-    /// @notice Packed snapshot for UIs (reduces RPC calls).
     function getState()
         external
         view
@@ -406,7 +404,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         drawingAt = drawingRequestedAt;
     }
 
-    /// @notice User-centric snapshot for dashboards/wallet UIs.
     function getUserStatus(address user)
         external
         view
@@ -428,7 +425,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         canBuy = (status == Status.Open && block.timestamp < deadline && user != creator && !isSoldOut());
 
-        // Mirrors minTicketsToBuy logic
         minBuyNow = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
         if (!isLastBuyer) {
             uint256 newMin = _minTicketsForNewRange();
@@ -436,8 +432,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    /// @notice Combined action flags + fee + time left, tailored for the caller.
-    /// @dev Adds `finalizeWouldCancel` so UIs don't promise a winner draw when it would cancel/refund.
     function getActionFlags(address caller)
         external
         view
@@ -477,7 +471,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    /// @notice Economic preview based on current ticketRevenue (useful for UI transparency).
     function previewPayouts()
         external
         view
@@ -497,7 +490,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         protocolAmountIfDrawnNow = feePot + feeRevenue;
     }
 
-    /// @notice Batch claimables/tickets for many users (indexer/admin UI helper).
     function getClaimables(address[] calldata users)
         external
         view
@@ -552,7 +544,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (block.timestamp >= deadline) revert LotteryExpired();
         if (msg.sender == creator) revert CreatorCannotBuy();
 
-        // Keep creator-configured minimum for everyone
         if (minPurchaseAmount > 0 && count < minPurchaseAmount) revert BatchTooSmall();
 
         uint256 currentSold = getSold();
@@ -564,7 +555,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         bool returning = (ticketRanges.length > 0 && ticketRanges[ticketRanges.length - 1].buyer == msg.sender);
 
-        // Throttle only when this buy would create a NEW range
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
 
@@ -602,7 +592,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     function finalize() external payable nonReentrant {
-        // preserve original behavior
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
@@ -780,7 +769,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
-        // Ticket refunds are implicit on cancel: just call withdrawFunds()
         if (status == Status.Canceled) {
             uint256 tix = ticketsOwned[msg.sender];
             if (tix > 0) {
