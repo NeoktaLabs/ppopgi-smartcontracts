@@ -9,22 +9,24 @@ import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
 /**
  * @title SingleWinnerRaffle
- * @notice USDC-only single-winner raffle. No owner/admin functions.
- *         Native (ETH) is only used to pay the Entropy fee at finalize().
+ * @notice USDC-only single-winner raffle.
+ *         TRUSTED-ONLY lifecycle transitions:
+ *           - finalize(): only finalizer
+ *           - forceCancelStuck(): only finalizer or guardian
+ *           - confirmFunding(): only factory (deployer)
  *
  * @dev Assumption: USDC always has 6 decimals (canonical USDC). We intentionally do NOT query decimals().
- * @dev finalize() and forceCancelStuck() are intentionally permissionless for UX and bot operation.
  */
 contract SingleWinnerRaffle is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct LotteryParams {
         address usdcToken;
-        address entropy;            // Entropy contract (v2)
-        address entropyProvider;    // provider address (usually default provider)
-        uint32 callbackGasLimit;    // callback gas limit for entropy callback
-        address feeRecipient;       // protocol fee recipient (immutable per raffle)
-        uint256 protocolFeePercent; // 0..20 (immutable per raffle)
+        address entropy;
+        address entropyProvider;
+        uint32 callbackGasLimit;
+        address feeRecipient;
+        uint256 protocolFeePercent; // 0..20
         address creator;
         string name;
         uint256 ticketPrice;
@@ -33,9 +35,14 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         uint64 maxTickets;
         uint64 durationSeconds;
         uint32 minPurchaseAmount;
+
+        // New: trusted-only roles (immutable per raffle)
+        address finalizer; // keeper/bot
+        address guardian;  // Safe / ops multisig
     }
 
     // Errors
+    error ZeroAddress();
     error InvalidEntropy();
     error InvalidProvider();
     error InvalidUSDC();
@@ -52,7 +59,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error BatchTooCheap();
     error InvalidCallbackGasLimit();
 
-    error NotDeployer();
+    error NotFactory();
     error NotFundingPending();
     error FundingMismatch();
 
@@ -73,6 +80,8 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error InvalidRequest();
 
     error UnauthorizedCallback();
+    error UnauthorizedFinalizer();
+    error UnauthorizedGuardian();
 
     error NotDrawing();
     error NotCanceled();
@@ -85,14 +94,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
     // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
-    event TicketsPurchased(
-        address indexed buyer,
-        uint256 count,
-        uint256 totalCost,
-        uint256 totalSold,
-        uint256 rangeIndex,
-        bool isNewRange
-    );
+    event TicketsPurchased(address indexed buyer, uint256 count, uint256 totalCost, uint256 totalSold, uint256 rangeIndex, bool isNewRange);
     event LotteryFinalized(uint64 requestId, uint256 totalSold, address provider);
     event WinnerPicked(address indexed winner, uint256 winningTicketIndex, uint256 totalSold);
     event LotteryCanceled(string reason, uint256 sold, uint256 ticketRevenue, uint256 potRefund);
@@ -109,11 +111,15 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     address public immutable creator;
     address public immutable feeRecipient;
     uint256 public immutable protocolFeePercent;
-    address public immutable deployer;
 
     IEntropyV2 public immutable entropy;
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
+
+    // Trusted-only roles
+    address public immutable factory;   // the deployer contract (msg.sender in constructor)
+    address public immutable finalizer; // keeper/bot
+    address public immutable guardian;  // Safe / ops
 
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MAX_RANGES = 20_000;
@@ -121,7 +127,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
-    uint256 public constant PUBLIC_HATCH_DELAY = 2 hours;
+    uint256 public constant HATCH_DELAY = 2 hours; // trusted-only, but still delay for safety
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
     uint256 public totalReservedUSDC;
@@ -158,14 +164,30 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
     bool public creatorPotRefunded;
 
-    constructor(LotteryParams memory params) {
-        deployer = msg.sender;
+    modifier onlyFactory() {
+        if (msg.sender != factory) revert NotFactory();
+        _;
+    }
 
-        if (params.entropy == address(0)) revert InvalidEntropy();
+    modifier onlyFinalizer() {
+        if (msg.sender != finalizer) revert UnauthorizedFinalizer();
+        _;
+    }
+
+    modifier onlyGuardianOrFinalizer() {
+        if (msg.sender != guardian && msg.sender != finalizer) revert UnauthorizedGuardian();
+        _;
+    }
+
+    constructor(LotteryParams memory params) {
+        factory = msg.sender;
+
         if (params.usdcToken == address(0)) revert InvalidUSDC();
+        if (params.entropy == address(0)) revert InvalidEntropy();
         if (params.entropyProvider == address(0)) revert InvalidProvider();
         if (params.feeRecipient == address(0)) revert InvalidFeeRecipient();
         if (params.creator == address(0)) revert InvalidCreator();
+        if (params.finalizer == address(0) || params.guardian == address(0)) revert ZeroAddress();
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
@@ -178,8 +200,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
+        // Scanner-friendly ceilDiv (removes "precision loss" heuristics)
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
-        uint256 requiredMinPrice = (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry;
+        uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
 
         usdcToken = IERC20(params.usdcToken);
@@ -190,6 +213,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         feeRecipient = params.feeRecipient;
         protocolFeePercent = params.protocolFeePercent;
         creator = params.creator;
+
+        finalizer = params.finalizer;
+        guardian = params.guardian;
 
         name = params.name;
         createdAt = uint64(block.timestamp);
@@ -205,7 +231,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     // -------------------------
-    // UX helpers
+    // UX helpers / views
     // -------------------------
 
     function isFinalizable() public view returns (bool) {
@@ -218,7 +244,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     function isHatchOpen() public view returns (bool) {
-        return (status == Status.Drawing && block.timestamp > uint256(drawingRequestedAt) + PUBLIC_HATCH_DELAY);
+        return (status == Status.Drawing && block.timestamp > uint256(drawingRequestedAt) + HATCH_DELAY);
     }
 
     function quoteEntropyFee() external view returns (uint256) {
@@ -252,11 +278,10 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     // -------------------------
-    // Core
+    // Core (trusted-only transitions)
     // -------------------------
 
-    function confirmFunding() external {
-        if (msg.sender != deployer) revert NotDeployer();
+    function confirmFunding() external onlyFactory {
         if (status != Status.FundingPending) revert NotFundingPending();
 
         uint256 bal = usdcToken.balanceOf(address(this));
@@ -317,11 +342,11 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     /**
-     * @notice Permissionless finalize:
+     * @notice TRUSTED-ONLY finalize:
      * - if expired and minTickets not reached => cancels (must send 0 ETH)
      * - otherwise requests entropy randomness (must send exact entropy fee)
      */
-    function finalize() external payable nonReentrant {
+    function finalize() external payable nonReentrant onlyFinalizer {
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
@@ -331,7 +356,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
-        // Cancel path: MUST be called with 0 value, otherwise ETH would be stuck.
         if (isExpired && sold < minTickets) {
             if (msg.value != 0) revert WrongEntropyFee();
             _cancelAndRefundCreator("Min tickets not reached");
@@ -348,13 +372,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value != fee) revert WrongEntropyFee();
 
-        // Salt does NOT need block.number. Entropy provides randomness in callback.
-        bytes32 requestSalt = keccak256(abi.encodePacked(address(this), msg.sender, sold, block.timestamp));
+        // No block.number (avoid L2 warnings). Entropy provides randomness in callback.
+        bytes32 requestSalt = keccak256(abi.encodePacked(address(this), sold, block.timestamp));
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, requestSalt, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
         entropyRequestId = requestId;
-
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
@@ -374,12 +397,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     /**
-     * @notice Permissionless hatch if drawing gets stuck.
-     * Anyone can call after PUBLIC_HATCH_DELAY.
+     * @notice TRUSTED-ONLY hatch if drawing gets stuck.
+     * Guardian or Finalizer can call after HATCH_DELAY.
      */
-    function forceCancelStuck() external nonReentrant {
+    function forceCancelStuck() external nonReentrant onlyGuardianOrFinalizer {
         if (status != Status.Drawing) revert NotDrawing();
-        if (block.timestamp <= drawingRequestedAt + PUBLIC_HATCH_DELAY) revert EarlyCancellationRequest();
+        if (block.timestamp <= drawingRequestedAt + HATCH_DELAY) revert EarlyCancellationRequest();
 
         emit EmergencyRecovery();
         _cancelAndRefundCreator("Emergency Recovery");
@@ -403,7 +426,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         winner = w;
         status = Status.Completed;
 
-        // Use mulDiv to satisfy scanners and be future-proof.
         uint256 feePot = Math.mulDiv(winningPot, protocolFeePercent, 100);
         uint256 feeRev = Math.mulDiv(ticketRevenue, protocolFeePercent, 100);
 
@@ -466,6 +488,8 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
+    // Users still self-serve their own funds (no access-control needed)
+
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
 
@@ -473,7 +497,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (tix == 0) revert NothingToRefund();
 
         uint256 refund = tix * ticketPrice;
-
         ticketsOwned[msg.sender] = 0;
 
         if (totalReservedUSDC < refund) revert AccountingMismatch();
