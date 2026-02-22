@@ -315,6 +315,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
+
+        // ✅ FIX: must return empty dynamic arrays
         if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
@@ -435,11 +437,13 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     /// @notice Combined action flags + fee + time left, tailored for the caller.
+    /// @dev Adds `finalizeWouldCancel` so UIs don't promise a winner draw when it would cancel/refund.
     function getActionFlags(address caller)
         external
         view
         returns (
             bool canFinalize,
+            bool finalizeWouldCancel,
             bool canCancel,
             bool canEmergencyCancel,
             uint256 finalizeFee,
@@ -452,8 +456,14 @@ contract SingleWinnerLottery is ReentrancyGuard {
         bool open = (status == Status.Open);
         bool drawing = (status == Status.Drawing);
 
-        canFinalize = open && (isExpired() || isSoldOut());
-        canCancel = open && (block.timestamp >= deadline) && (getSold() < minTickets);
+        bool expiredNow = isExpired();
+        bool soldOutNow = isSoldOut();
+        uint256 sold = getSold();
+
+        canFinalize = open && (expiredNow || soldOutNow);
+        finalizeWouldCancel = open && expiredNow && (sold < minTickets);
+
+        canCancel = open && (block.timestamp >= deadline) && (sold < minTickets);
 
         if (!drawing) {
             canEmergencyCancel = false;
