@@ -111,6 +111,10 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit EntropyConfigUpdated(_entropy, _entropyProvider);
     }
 
+    // =========================
+    // Option B creator source
+    // =========================
+
     /// @notice Called by the Registry (Option B) to read creator for a lottery this deployer created.
     function creatorOfLottery(address lottery) external view returns (address) {
         address c = _creatorOfLottery[lottery];
@@ -118,7 +122,41 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         return c;
     }
 
-    /// @notice Convenience view for frontends: current deployer settings used for NEW lotteries.
+    /// @notice Non-reverting getter (UIs/indexers prefer this).
+    function getCreatorOfLotteryOrZero(address lottery) external view returns (address creator) {
+        return _creatorOfLottery[lottery];
+    }
+
+    /// @notice Batch non-reverting creator lookup.
+    function getCreatorsForLotteries(address[] calldata lotteries) external view returns (address[] memory creators) {
+        uint256 n = lotteries.length;
+        creators = new address[](n);
+        for (uint256 i = 0; i < n; i++) {
+            creators[i] = _creatorOfLottery[lotteries[i]];
+        }
+    }
+
+    /// @notice Batch lookup with an explicit known flag.
+    function getCreatorsForLotteriesWithKnown(address[] calldata lotteries)
+        external
+        view
+        returns (address[] memory creators, bool[] memory known)
+    {
+        uint256 n = lotteries.length;
+        creators = new address[](n);
+        known = new bool[](n);
+
+        for (uint256 i = 0; i < n; i++) {
+            address c = _creatorOfLottery[lotteries[i]];
+            creators[i] = c;
+            known[i] = (c != address(0));
+        }
+    }
+
+    // =========================
+    // UX helpers
+    // =========================
+
     function getCurrentConfig()
         external
         view
@@ -143,7 +181,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         );
     }
 
-    /// @notice Convenience view for frontends: exact params that WOULD be used if a lottery were created now.
     function previewLotteryParams(
         address creator,
         string calldata name,
@@ -211,7 +248,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     ) external nonReentrant returns (address lotteryAddr) {
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
-        // snapshot mutable config for this lottery (so later changes don't affect it)
         address entropySnapshot = entropy;
         address entropyProviderSnapshot = entropyProvider;
         address feeRecipientSnapshot = feeRecipient;
@@ -245,7 +281,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
         uint64 dl = lot.deadline();
 
-        // Registry will read creator from THIS deployer via creatorOfLottery(lotteryAddr)
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
             // ok
         } catch (bytes memory data) {
