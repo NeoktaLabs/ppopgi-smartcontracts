@@ -2,16 +2,17 @@
 pragma solidity ^0.8.24;
 
 /**
- * @title LotteryRegistry
- * @notice A minimal, “forever” on-chain registry for lottery instances.
+ * @title RafflesRegistry
+ * @notice A minimal, “forever” on-chain registry for raffle instances.
  */
-contract LotteryRegistry {
+contract RafflesRegistry {
     error NotOwner();
     error ZeroAddress();
     error NotRegistrar();
     error AlreadyRegistered();
     error InvalidTypeId();
     error NotContract();
+    error IndexOutOfBounds();
 
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrarSet(address indexed registrar, bool authorized);
@@ -83,12 +84,14 @@ contract LotteryRegistry {
     }
 
     function getLotteryByTypeAtIndex(uint256 typeId, uint256 index) external view returns (address) {
-        return lotteriesByType[typeId][index];
+        address[] storage arr = lotteriesByType[typeId];
+        if (index >= arr.length) revert IndexOutOfBounds();
+        return arr[index];
     }
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
         uint256 end = start + limit;
         if (end > n) end = n;
 
@@ -101,7 +104,7 @@ contract LotteryRegistry {
     function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
         uint256 end = start + limit;
         if (end > n) end = n;
 
