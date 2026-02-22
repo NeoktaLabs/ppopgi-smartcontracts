@@ -16,6 +16,8 @@ contract RafflesRegistry {
 
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrarSet(address indexed registrar, bool authorized);
+
+    // Kept name for backward compatibility with your indexers/consumers.
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address public owner;
@@ -92,6 +94,7 @@ contract RafflesRegistry {
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) return new address;
+
         uint256 end = start + limit;
         if (end > n) end = n;
 
@@ -105,6 +108,7 @@ contract RafflesRegistry {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) return new address;
+
         uint256 end = start + limit;
         if (end > n) end = n;
 
