@@ -17,6 +17,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     error NotAuthorizedRegistrar();
     error InvalidCallbackGasLimit();
     error RegistryRegistrationFailed(bytes lowLevelData);
+    error UnknownLottery(); // for creatorOfLottery queries
 
     event LotteryDeployed(
         address indexed lottery,
@@ -51,6 +52,9 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
     address public feeRecipient;
     uint256 public protocolFeePercent;
+
+    // Option B: deployer is the source of truth for creator
+    mapping(address => address) public creatorOfLottery;
 
     constructor(
         address initialOwner,
@@ -107,6 +111,13 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit EntropyConfigUpdated(_entropy, _entropyProvider);
     }
 
+    /// @notice Called by the Registry (Option B) to read creator for a lottery this deployer created.
+    function creatorOfLottery(address lottery) external view returns (address) {
+        address c = creatorOfLottery[lottery];
+        if (c == address(0)) revert UnknownLottery();
+        return c;
+    }
+
     /// @notice Convenience view for frontends: current deployer settings used for NEW lotteries.
     function getCurrentConfig()
         external
@@ -133,7 +144,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Convenience view for frontends: exact params that WOULD be used if a lottery were created now.
-    /// @dev `creator` is passed explicitly so UIs can preview for any address.
     function previewLotteryParams(
         address creator,
         string calldata name,
@@ -162,17 +172,14 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         });
     }
 
-    /// @notice UI helper: whether this deployer is currently authorized to register lotteries in the registry.
     function isDeployerAuthorized() external view returns (bool) {
         return registry.isRegistrar(address(this));
     }
 
-    /// @notice UI helper: tells the user what the deploy will pull from their USDC balance (the pot).
     function quoteCreate(uint256 winningPot) public view returns (address usdcToken, uint256 usdcAmountToTransfer) {
         return (usdc, winningPot);
     }
 
-    /// @notice One-call preview for frontends: quote + full params.
     function previewCreate(
         address creator,
         string calldata name,
@@ -188,7 +195,9 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         returns (address usdcToken, uint256 usdcToTransfer, SingleWinnerLottery.LotteryParams memory params)
     {
         (usdcToken, usdcToTransfer) = quoteCreate(winningPot);
-        params = previewLotteryParams(creator, name, ticketPrice, winningPot, minTickets, maxTickets, durationSeconds, minPurchaseAmount);
+        params = previewLotteryParams(
+            creator, name, ticketPrice, winningPot, minTickets, maxTickets, durationSeconds, minPurchaseAmount
+        );
     }
 
     function createSingleWinnerLottery(
@@ -228,12 +237,15 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         SingleWinnerLottery lot = new SingleWinnerLottery(params);
         lotteryAddr = address(lot);
 
+        // Option B: record creator mapping BEFORE registry registration
+        creatorOfLottery[lotteryAddr] = msg.sender;
+
         IERC20(usdc).safeTransferFrom(msg.sender, lotteryAddr, winningPot);
         lot.confirmFunding();
 
         uint64 dl = lot.deadline();
 
-        // Registry reads creator() from the lottery itself.
+        // Registry will read creator from THIS deployer via creatorOfLottery(lotteryAddr)
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
             // ok
         } catch (bytes memory data) {
