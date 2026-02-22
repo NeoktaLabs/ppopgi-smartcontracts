@@ -80,7 +80,14 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error UnexpectedTransferAmount();
 
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
-    event TicketsPurchased(address indexed buyer, uint256 count, uint256 totalCost, uint256 totalSold, uint256 rangeIndex, bool isNewRange);
+    event TicketsPurchased(
+        address indexed buyer,
+        uint256 count,
+        uint256 totalCost,
+        uint256 totalSold,
+        uint256 rangeIndex,
+        bool isNewRange
+    );
     event LotteryFinalized(uint64 requestId, uint256 totalSold, address provider);
     event WinnerPicked(address indexed winner, uint256 winningTicketIndex, uint256 totalSold);
     event LotteryCanceled(string reason, uint256 sold, uint256 ticketRevenue, uint256 potRefund);
@@ -106,8 +113,17 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     address public immutable guardian;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
-    uint256 public constant MAX_RANGES = 20_000;
-    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
+
+    // Updated as requested
+    uint256 public constant MAX_RANGES = 100_000;
+
+    // Base min cost to create a NEW range (USDC 6 decimals)
+    uint256 public constant MIN_NEW_RANGE_COST_BASE = 1_000_000; // 1 USDC
+
+    // Ramp: +1 USDC every 10,000 ranges
+    uint256 public constant RANGE_STEP = 10_000;
+    uint256 public constant RANGE_COST_STEP = 1_000_000; // 1 USDC
+
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
@@ -184,8 +200,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
+        // At deployment, tier is 0 => base min range cost.
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
-        uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry);
+        uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST_BASE, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
 
         usdcToken = IERC20(params.usdcToken);
@@ -213,6 +230,136 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
+    // -------------------------
+    // Range policy + UX getters
+    // -------------------------
+
+    /// @notice Minimum totalCost required to CREATE a new range at a given rangeCount (before adding the new one).
+    function minNewRangeCostAt(uint256 rangeCount) public pure returns (uint256) {
+        uint256 tier = rangeCount / RANGE_STEP; // 0..9 when MAX_RANGES=100k
+        return MIN_NEW_RANGE_COST_BASE + (tier * RANGE_COST_STEP);
+    }
+
+    /// @notice Minimum totalCost required to create a new range RIGHT NOW.
+    function minNewRangeCostNow() public view returns (uint256) {
+        return minNewRangeCostAt(ticketRanges.length);
+    }
+
+    /// @notice Minimum ticket count required (at current ticketPrice) to be allowed to create a new range RIGHT NOW.
+    function minTicketsToOpenNewRangeNow() external view returns (uint256) {
+        return Math.ceilDiv(minNewRangeCostNow(), ticketPrice);
+    }
+
+    /// @notice Whether a buyer would create a new range (i.e., buyer != last buyer).
+    function wouldCreateNewRange(address buyer) public view returns (bool) {
+        uint256 len = ticketRanges.length;
+        return (len == 0 || ticketRanges[len - 1].buyer != buyer);
+    }
+
+    /// @notice High-level range policy constants in one call.
+    function getRangePolicy()
+        external
+        pure
+        returns (
+            uint256 maxRanges,
+            uint256 rangeStep,
+            uint256 baseCost,
+            uint256 costStep
+        )
+    {
+        return (MAX_RANGES, RANGE_STEP, MIN_NEW_RANGE_COST_BASE, RANGE_COST_STEP);
+    }
+
+    /// @notice Current tier info to show users why min changes over time.
+    function getRangeTierInfo()
+        external
+        view
+        returns (
+            uint256 rangeCount,
+            uint256 tier,
+            uint256 minCostToCreateNewRange,
+            uint256 nextTierAtRangeCount,
+            uint256 rangesUntilNextTier
+        )
+    {
+        rangeCount = ticketRanges.length;
+        tier = rangeCount / RANGE_STEP;
+        minCostToCreateNewRange = minNewRangeCostAt(rangeCount);
+        nextTierAtRangeCount = (tier + 1) * RANGE_STEP;
+        if (nextTierAtRangeCount > MAX_RANGES) nextTierAtRangeCount = MAX_RANGES;
+        rangesUntilNextTier = (rangeCount >= nextTierAtRangeCount) ? 0 : (nextTierAtRangeCount - rangeCount);
+    }
+
+    /// @notice Range count.
+    function getTicketRangesCount() external view returns (uint256) {
+        return ticketRanges.length;
+    }
+
+    /// @notice Get a single range with explicit lowerBound/size (better UX than only upperBound).
+    function getRangeAt(uint256 index)
+        external
+        view
+        returns (address buyer, uint96 lowerBound, uint96 upperBound, uint96 size)
+    {
+        uint256 len = ticketRanges.length;
+        if (index >= len) revert TooManyRanges(); // reuse existing error to avoid new ones
+
+        TicketRange storage tr = ticketRanges[index];
+        buyer = tr.buyer;
+        upperBound = tr.upperBound;
+        lowerBound = (index == 0) ? 0 : ticketRanges[index - 1].upperBound;
+        size = upperBound - lowerBound;
+    }
+
+    /// @notice Paginated ranges including lowerBounds for UI rendering.
+    function getRangesWithBounds(uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory buyers, uint96[] memory lowerBounds, uint96[] memory upperBounds)
+    {
+        uint256 n = ticketRanges.length;
+        if (start >= n || limit == 0) return (new address, new uint96, new uint96);
+
+        uint256 end = start + limit;
+        if (end > n) end = n;
+
+        uint256 size = end - start;
+        buyers = new address[](size);
+        lowerBounds = new uint96[](size);
+        upperBounds = new uint96[](size);
+
+        for (uint256 i = 0; i < size; i++) {
+            uint256 idx = start + i;
+            TicketRange storage tr = ticketRanges[idx];
+            buyers[i] = tr.buyer;
+            upperBounds[i] = tr.upperBound;
+            lowerBounds[i] = (idx == 0) ? 0 : ticketRanges[idx - 1].upperBound;
+        }
+    }
+
+    /// @notice Find which range owns a ticket index (0..sold-1). Useful for explorers/debug/UI.
+    function findRangeForTicket(uint256 ticketIndex) external view returns (uint256 rangeIndex, address buyer) {
+        uint256 sold = getSold();
+        if (ticketIndex >= sold) revert AccountingMismatch();
+        rangeIndex = _findRangeIndex(ticketIndex);
+        buyer = ticketRanges[rangeIndex].buyer;
+    }
+
+    function _findRangeIndex(uint256 winningTicket) internal view returns (uint256) {
+        uint256 low = 0;
+        uint256 high = ticketRanges.length - 1;
+        while (low < high) {
+            uint256 mid = low + (high - low) / 2;
+            if (ticketRanges[mid].upperBound > winningTicket) high = mid;
+            else low = mid + 1;
+        }
+        return low;
+    }
+
+    // -------------------------
+    // Other UX helpers
+    // -------------------------
+
     function isFinalizable() public view returns (bool) {
         if (status != Status.Open) return false;
         if (entropyRequestId != 0) return false;
@@ -228,32 +375,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
     function quoteEntropyFee() external view returns (uint256) {
         return entropy.getFeeV2(callbackGasLimit);
-    }
-
-    function getTicketRangesCount() external view returns (uint256) {
-        return ticketRanges.length;
-    }
-
-    function getTicketRanges(uint256 start, uint256 limit)
-        external
-        view
-        returns (address[] memory buyers, uint96[] memory upperBounds)
-    {
-        uint256 n = ticketRanges.length;
-        if (start >= n || limit == 0) return (new address, new uint96);
-
-        uint256 end = start + limit;
-        if (end > n) end = n;
-
-        uint256 size = end - start;
-        buyers = new address[](size);
-        upperBounds = new uint96[](size);
-
-        for (uint256 i = 0; i < size; i++) {
-            TicketRange storage tr = ticketRanges[start + i];
-            buyers[i] = tr.buyer;
-            upperBounds[i] = tr.upperBound;
-        }
     }
 
     function confirmFunding() external onlyFactory {
@@ -288,7 +409,10 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
-            if (totalCost < MIN_NEW_RANGE_COST) revert BatchTooCheap();
+
+            // Dynamic min cost: +1 USDC every 10k ranges.
+            uint256 minCost = minNewRangeCostAt(ticketRanges.length);
+            if (totalCost < minCost) revert BatchTooCheap();
         }
 
         uint256 rangeIndex;
@@ -386,7 +510,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         selectedProvider = address(0);
 
         uint256 winningIndex = uint256(rand) % total;
-        address w = _findWinner(winningIndex);
+        address w = ticketRanges[_findRangeIndex(winningIndex)].buyer;
 
         winner = w;
         status = Status.Completed;
@@ -415,17 +539,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         emit ProtocolFeesCollected(protocolAmount);
     }
 
-    function _findWinner(uint256 winningTicket) internal view returns (address) {
-        uint256 low = 0;
-        uint256 high = ticketRanges.length - 1;
-        while (low < high) {
-            uint256 mid = low + (high - low) / 2;
-            if (ticketRanges[mid].upperBound > winningTicket) high = mid;
-            else low = mid + 1;
-        }
-        return ticketRanges[low].buyer;
-    }
-
     function _cancelAndRefundCreator(string memory reason) internal {
         if (status == Status.Canceled) return;
 
@@ -452,7 +565,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
-
 
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
