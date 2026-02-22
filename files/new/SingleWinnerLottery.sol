@@ -169,11 +169,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
-        try IERC20Metadata(params.usdcToken).decimals() returns (uint8 d) {
-            if (d != 6) revert InvalidUSDC();
-        } catch {
-            revert InvalidUSDC();
-        }
+        // ✅ FIX (medium finding): remove try/catch around external call
+        // If a non-USDC token is passed and doesn't implement decimals(), deployment will revert naturally.
+        uint8 d = IERC20Metadata(params.usdcToken).decimals();
+        if (d != 6) revert InvalidUSDC();
 
         if (bytes(params.name).length == 0) revert NameEmpty();
         if (params.durationSeconds < 600) revert DurationTooShort();
@@ -314,7 +313,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
         // ✅ FIX: return empty dynamic arrays
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
