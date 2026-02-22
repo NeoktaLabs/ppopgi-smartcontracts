@@ -4,8 +4,17 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
+/**
+ * @title SingleWinnerRaffle
+ * @notice USDC-only single-winner raffle. No owner/admin functions.
+ *         Native (ETH) is only used to pay the Entropy fee at finalize().
+ *
+ * @dev Assumption: USDC always has 6 decimals (canonical USDC). We intentionally do NOT query decimals().
+ * @dev finalize() and forceCancelStuck() are intentionally permissionless for UX and bot operation.
+ */
 contract SingleWinnerRaffle is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -26,6 +35,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         uint32 minPurchaseAmount;
     }
 
+    // Errors
     error InvalidEntropy();
     error InvalidProvider();
     error InvalidUSDC();
@@ -65,7 +75,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error UnauthorizedCallback();
 
     error NotDrawing();
-    error CannotCancel();
     error NotCanceled();
     error EarlyCancellationRequest();
 
@@ -74,6 +83,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error AccountingMismatch();
     error UnexpectedTransferAmount();
 
+    // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(
         address indexed buyer,
@@ -90,12 +100,11 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     event RefundAllocated(address indexed user, uint256 amount);
     event FundsClaimed(address indexed user, uint256 amount);
     event ProtocolFeesCollected(uint256 amount);
-    event GovernanceLockUpdated(uint256 activeDrawings);
     event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
     event FundingConfirmed(address indexed funder, uint256 amount);
-
     event TicketRefundClaimed(address indexed user, uint256 amount);
 
+    // State
     IERC20 public immutable usdcToken;
     address public immutable creator;
     address public immutable feeRecipient;
@@ -116,7 +125,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
     uint256 public totalReservedUSDC;
-    uint256 public activeDrawings;
 
     enum Status { FundingPending, Open, Drawing, Completed, Canceled }
     Status public status;
@@ -175,7 +183,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
 
         usdcToken = IERC20(params.usdcToken);
-
         entropy = IEntropyV2(params.entropy);
         entropyProvider = params.entropyProvider;
         callbackGasLimit = params.callbackGasLimit;
@@ -197,83 +204,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
-    function getSummary()
-        external
-        view
-        returns (
-            Status _status,
-            string memory _name,
-            address _creator,
-            address _usdc,
-            uint64 _createdAt,
-            uint64 _deadline,
-            uint256 _ticketPrice,
-            uint256 _winningPot,
-            uint64 _minTickets,
-            uint64 _maxTickets,
-            uint32 _minPurchaseAmount,
-            uint256 _sold,
-            uint256 _ticketRevenue,
-            address _winner,
-            uint64 _entropyRequestId,
-            uint64 _drawingRequestedAt,
-            address _feeRecipient,
-            uint256 _protocolFeePercent
-        )
-    {
-        _status = status;
-        _name = name;
-        _creator = creator;
-        _usdc = address(usdcToken);
-        _createdAt = createdAt;
-        _deadline = deadline;
-        _ticketPrice = ticketPrice;
-        _winningPot = winningPot;
-        _minTickets = minTickets;
-        _maxTickets = maxTickets;
-        _minPurchaseAmount = minPurchaseAmount;
-        _sold = getSold();
-        _ticketRevenue = ticketRevenue;
-        _winner = winner;
-        _entropyRequestId = entropyRequestId;
-        _drawingRequestedAt = drawingRequestedAt;
-        _feeRecipient = feeRecipient;
-        _protocolFeePercent = protocolFeePercent;
-    }
-
-    function getAccount(address user)
-        external
-        view
-        returns (
-            uint256 ownedTickets,
-            uint256 claimable,
-            bool canRefundTickets,
-            bool canWithdraw
-        )
-    {
-        ownedTickets = ticketsOwned[user];
-        claimable = claimableFunds[user];
-        canRefundTickets = (status == Status.Canceled && ownedTickets > 0);
-        canWithdraw = (claimable > 0);
-    }
-
-    function getActions(address user)
-        external
-        view
-        returns (
-            bool canBuy,
-            bool canFinalize,
-            bool canHatch,
-            bool canRefundTickets,
-            bool canWithdraw
-        )
-    {
-        canBuy = (status == Status.Open && block.timestamp < deadline && user != creator);
-        canFinalize = isFinalizable();
-        canHatch = isHatchOpen();
-        canRefundTickets = (status == Status.Canceled && ticketsOwned[user] > 0);
-        canWithdraw = (claimableFunds[user] > 0);
-    }
+    // -------------------------
+    // UX helpers
+    // -------------------------
 
     function isFinalizable() public view returns (bool) {
         if (status != Status.Open) return false;
@@ -303,6 +236,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
         if (start >= n || limit == 0) return (new address, new uint96);
+
         uint256 end = start + limit;
         if (end > n) end = n;
 
@@ -317,15 +251,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         }
     }
 
-    function getContractUSDCBalance() external view returns (uint256) {
-        return usdcToken.balanceOf(address(this));
-    }
-
-    function getUnreservedUSDC() external view returns (uint256) {
-        uint256 bal = usdcToken.balanceOf(address(this));
-        if (bal <= totalReservedUSDC) return 0;
-        return bal - totalReservedUSDC;
-    }
+    // -------------------------
+    // Core
+    // -------------------------
 
     function confirmFunding() external {
         if (msg.sender != deployer) revert NotDeployer();
@@ -388,6 +316,11 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
+    /**
+     * @notice Permissionless finalize:
+     * - if expired and minTickets not reached => cancels (must send 0 ETH)
+     * - otherwise requests entropy randomness (must send exact entropy fee)
+     */
     function finalize() external payable nonReentrant {
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
@@ -398,6 +331,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
+        // Cancel path: MUST be called with 0 value, otherwise ETH would be stuck.
         if (isExpired && sold < minTickets) {
             if (msg.value != 0) revert WrongEntropyFee();
             _cancelAndRefundCreator("Min tickets not reached");
@@ -410,13 +344,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         soldAtDrawing = sold;
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
-        activeDrawings += 1;
-        emit GovernanceLockUpdated(activeDrawings);
 
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value != fee) revert WrongEntropyFee();
 
-        bytes32 requestSalt = keccak256(abi.encodePacked(address(this), msg.sender, sold, block.number));
+        // Salt does NOT need block.number. Entropy provides randomness in callback.
+        bytes32 requestSalt = keccak256(abi.encodePacked(address(this), msg.sender, sold, block.timestamp));
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, requestSalt, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
@@ -440,20 +373,16 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         _resolve(randomNumber);
     }
 
+    /**
+     * @notice Permissionless hatch if drawing gets stuck.
+     * Anyone can call after PUBLIC_HATCH_DELAY.
+     */
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
         if (block.timestamp <= drawingRequestedAt + PUBLIC_HATCH_DELAY) revert EarlyCancellationRequest();
 
         emit EmergencyRecovery();
         _cancelAndRefundCreator("Emergency Recovery");
-    }
-
-    function cancel() external nonReentrant {
-        if (status != Status.Open) revert CannotCancel();
-        if (block.timestamp < deadline) revert CannotCancel();
-        if (getSold() >= minTickets) revert CannotCancel();
-
-        _cancelAndRefundCreator("Min tickets not reached");
     }
 
     function _resolve(bytes32 rand) internal {
@@ -468,17 +397,15 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         drawingRequestedAt = 0;
         selectedProvider = address(0);
 
-        if (activeDrawings > 0) activeDrawings -= 1;
-        emit GovernanceLockUpdated(activeDrawings);
-
         uint256 winningIndex = uint256(rand) % total;
         address w = _findWinner(winningIndex);
 
         winner = w;
         status = Status.Completed;
 
-        uint256 feePot = (winningPot * protocolFeePercent) / 100;
-        uint256 feeRev = (ticketRevenue * protocolFeePercent) / 100;
+        // Use mulDiv to satisfy scanners and be future-proof.
+        uint256 feePot = Math.mulDiv(winningPot, protocolFeePercent, 100);
+        uint256 feeRev = Math.mulDiv(ticketRevenue, protocolFeePercent, 100);
 
         uint256 winnerAmount = winningPot - feePot;
         uint256 creatorNet = ticketRevenue - feeRev;
@@ -519,19 +446,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         soldAtCancel = soldSnapshot;
         canceledAt = uint64(block.timestamp);
 
-        bool wasDrawing = (status == Status.Drawing);
-
         status = Status.Canceled;
 
         selectedProvider = address(0);
         drawingRequestedAt = 0;
         entropyRequestId = 0;
         soldAtDrawing = 0;
-
-        if (wasDrawing && activeDrawings > 0) {
-            activeDrawings -= 1;
-            emit GovernanceLockUpdated(activeDrawings);
-        }
 
         uint256 potRefund = 0;
         if (!creatorPotRefunded && winningPot > 0) {
