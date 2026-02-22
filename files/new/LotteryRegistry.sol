@@ -20,12 +20,7 @@ contract LotteryRegistry is Ownable2Step {
     error InvalidCreator();
 
     event RegistrarSet(address indexed registrar, bool authorized);
-    event LotteryRegistered(
-        uint256 indexed index,
-        uint256 indexed typeId,
-        address indexed lottery,
-        address creator
-    );
+    event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address[] public allLotteries;
 
@@ -36,7 +31,7 @@ contract LotteryRegistry is Ownable2Step {
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
-    // Optional but recommended provenance: who registered this lottery
+    // Optional provenance: who registered this lottery
     mapping(address => address) public registrarOf;
 
     modifier onlyRegistrar() {
