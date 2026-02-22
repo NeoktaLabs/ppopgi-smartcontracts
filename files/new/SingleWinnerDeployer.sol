@@ -214,7 +214,8 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
         uint64 dl = lot.deadline();
 
-        try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
+        // Registry now reads creator() from the lottery itself (no creator param here).
+        try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
             // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
