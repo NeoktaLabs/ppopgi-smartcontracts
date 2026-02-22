@@ -210,7 +210,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit FundingConfirmed(msg.sender, winningPot);
     }
 
-
     function isOpen() external view returns (bool) {
         return status == Status.Open && block.timestamp < deadline;
     }
@@ -295,7 +294,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -338,7 +337,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         required = _minTicketsForNewRange();
         if (minPurchaseAmount > required) required = minPurchaseAmount;
     }
-
 
     function quoteBuyFor(address user, uint256 count)
         external
@@ -546,12 +544,14 @@ contract SingleWinnerLottery is ReentrancyGuard {
         selectedProvider = entropyProvider;
 
         finalizeNonce += 1;
+
+        // ✅ PATCH: remove msg.sender from userRand to avoid caller-controlled seed input
         bytes32 userRand = keccak256(
             abi.encodePacked(
                 address(this),
-                msg.sender,
                 sold,
                 ticketRevenue,
+                createdAt,
                 deadline,
                 finalizeNonce
             )
