@@ -3,6 +3,11 @@ pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
+/// @dev Minimal interface the Registry uses to query the registrar (deployer).
+interface ICreatorSource {
+    function creatorOfLottery(address lottery) external view returns (address);
+}
+
 contract LotteryRegistry is Ownable2Step {
     error ZeroAddress();
     error NotRegistrar();
@@ -10,19 +15,29 @@ contract LotteryRegistry is Ownable2Step {
     error InvalidTypeId();
     error NotContract();
 
-    // Creator integrity errors
+    // Option B integrity errors (registrar is source of truth)
     error CreatorQueryFailed();
     error InvalidCreator();
 
     event RegistrarSet(address indexed registrar, bool authorized);
-    event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
+    event LotteryRegistered(
+        uint256 indexed index,
+        uint256 indexed typeId,
+        address indexed lottery,
+        address creator
+    );
 
     address[] public allLotteries;
+
     mapping(address => uint256) public typeIdOf; // 0 = not registered
     mapping(address => address) public creatorOf;
     mapping(address => uint64) public registeredAt;
+
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
+
+    // Optional but recommended provenance: who registered this lottery
+    mapping(address => address) public registrarOf;
 
     modifier onlyRegistrar() {
         if (!isRegistrar[msg.sender]) revert NotRegistrar();
@@ -33,38 +48,42 @@ contract LotteryRegistry is Ownable2Step {
         if (initialOwner == address(0)) revert ZeroAddress();
     }
 
-    /// @notice Owner can add/remove deployer(s) at any time (affects only NEW registrations).
+    /// @notice Owner can add/remove registrar(s) at any time (affects only NEW registrations).
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
         if (authorized && registrar == address(0)) revert ZeroAddress();
         isRegistrar[registrar] = authorized;
         emit RegistrarSet(registrar, authorized);
     }
 
-    /// @notice Registrar registers a lottery. Creator is READ from the lottery contract (creator()).
+    /// @notice Registrar registers a lottery. Creator is READ from the registrar (deployer), not the lottery.
     function registerLottery(uint256 typeId, address lottery) external onlyRegistrar {
         if (lottery == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();
         if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
         if (lottery.code.length == 0) revert NotContract();
 
-        address creator = _readCreator(lottery);
+        address creator = _readCreatorFromRegistrar(msg.sender, lottery);
 
         allLotteries.push(lottery);
         typeIdOf[lottery] = typeId;
         creatorOf[lottery] = creator;
         registeredAt[lottery] = uint64(block.timestamp);
+        registrarOf[lottery] = msg.sender;
 
         lotteriesByType[typeId].push(lottery);
 
         emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
     }
 
-    /// @dev Reads `creator()` from a lottery with bounded-gas staticcall to avoid griefing.
-    function _readCreator(address lottery) internal view returns (address creator) {
-        (bool ok, bytes memory ret) = lottery.staticcall{gas: 25_000}(hex"02fb0c5e");
-        if (!ok || ret.length < 32) revert CreatorQueryFailed();
+    /// @dev Reads creator from the registrar (trusted deployer).
+    ///      Using try/catch keeps the registry resilient if the registrar reverts unexpectedly.
+    function _readCreatorFromRegistrar(address registrar, address lottery) internal view returns (address creator) {
+        try ICreatorSource(registrar).creatorOfLottery(lottery) returns (address c) {
+            creator = c;
+        } catch {
+            revert CreatorQueryFailed();
+        }
 
-        creator = abi.decode(ret, (address));
         if (creator == address(0)) revert InvalidCreator();
     }
 
@@ -101,7 +120,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -119,7 +138,7 @@ contract LotteryRegistry is Ownable2Step {
     {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -159,12 +178,13 @@ contract LotteryRegistry is Ownable2Step {
             address[] memory lotteries,
             uint256[] memory typeIds,
             address[] memory creators,
-            uint64[] memory timestamps
+            uint64[] memory timestamps,
+            address[] memory registrars
         )
     {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new uint256[](0), new address[](0), new uint64[](0));
+            return (new address, new uint256, new address, new uint64, new address);
         }
 
         uint256 end = start + limit;
@@ -175,6 +195,7 @@ contract LotteryRegistry is Ownable2Step {
         typeIds = new uint256[](m);
         creators = new address[](m);
         timestamps = new uint64[](m);
+        registrars = new address[](m);
 
         for (uint256 i = 0; i < m; i++) {
             address lot = allLotteries[start + i];
@@ -182,18 +203,24 @@ contract LotteryRegistry is Ownable2Step {
             typeIds[i] = typeIdOf[lot];
             creators[i] = creatorOf[lot];
             timestamps[i] = registeredAt[lot];
+            registrars[i] = registrarOf[lot];
         }
     }
 
     function getLotteriesByTypePageInfo(uint256 typeId, uint256 start, uint256 limit)
         external
         view
-        returns (address[] memory lotteries, address[] memory creators, uint64[] memory timestamps)
+        returns (
+            address[] memory lotteries,
+            address[] memory creators,
+            uint64[] memory timestamps,
+            address[] memory registrars
+        )
     {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new address[](0), new uint64[](0));
+            return (new address, new address, new uint64, new address);
         }
 
         uint256 end = start + limit;
@@ -203,20 +230,20 @@ contract LotteryRegistry is Ownable2Step {
         lotteries = new address[](m);
         creators = new address[](m);
         timestamps = new uint64[](m);
+        registrars = new address[](m);
 
         for (uint256 i = 0; i < m; i++) {
             address lot = arr[start + i];
             lotteries[i] = lot;
             creators[i] = creatorOf[lot];
             timestamps[i] = registeredAt[lot];
+            registrars[i] = registrarOf[lot];
         }
     }
 
     function areRegistrars(address[] calldata addrs) external view returns (bool[] memory out) {
         uint256 n = addrs.length;
         out = new bool[](n);
-        for (uint256 i = 0; i < n; i++) {
-            out[i] = isRegistrar[addrs[i]];
-        }
+        for (uint256 i = 0; i < n; i++) out[i] = isRegistrar[addrs[i]];
     }
 }
