@@ -61,16 +61,14 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error Overflow();
     error UnexpectedTransferAmount();
 
-    // New range throttle
     error NewRangeMinNotMet(uint256 required, uint256 provided);
 
     error RequestPending();
     error NotReadyToFinalize();
     error NoParticipants();
-    error InsufficientFee(); // kept for finalize() legacy behavior
+    error InsufficientFee();
     error InvalidRequest();
 
-    // Better UX errors for finalize wrappers
     error InvalidFeeAmount(uint256 required, uint256 provided);
     error FeeExceedsMax(uint256 fee, uint256 maxFee);
 
@@ -117,7 +115,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint256 public immutable protocolFeePercent;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
-    uint256 public constant MAX_RANGES = 100_000; // increased for big raffles
+    uint256 public constant MAX_RANGES = 100_000;
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
@@ -315,7 +313,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-
         if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
@@ -365,146 +362,124 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // =========================
-    // Added UX/indexer helpers
+    // Added UX/indexer helpers (NEW)
     // =========================
 
-    function getState()
+    /// @notice Rich buy quote for a specific user (UI-friendly, non-reverting).
+    function quoteBuyFor(address user, uint256 count)
+        external
+        view
+        returns (
+            uint256 totalCost,
+            bool canBuy,
+            uint256 minRequired,
+            uint256 maxNow
+        )
+    {
+        totalCost = ticketPrice * count;
+
+        // mirrors minTicketsToBuy logic
+        minRequired = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
+        uint256 len = ticketRanges.length;
+        bool isLastBuyer = (len > 0 && ticketRanges[len - 1].buyer == user);
+        if (!isLastBuyer) {
+            uint256 newMin = _minTicketsForNewRange();
+            if (newMin > minRequired) minRequired = newMin;
+        }
+
+        // mirrors maxBuyableNow logic
+        if (status != Status.Open || block.timestamp >= deadline) {
+            maxNow = 0;
+        } else {
+            uint256 sold = getSold();
+            uint256 cap = HARD_CAP_TICKETS;
+            if (maxTickets > 0 && uint256(maxTickets) < cap) cap = uint256(maxTickets);
+            if (sold >= cap) maxNow = 0;
+            else {
+                uint256 remain = cap - sold;
+                maxNow = remain > MAX_BATCH_BUY ? MAX_BATCH_BUY : remain;
+            }
+        }
+
+        canBuy =
+            (status == Status.Open) &&
+            (block.timestamp < deadline) &&
+            (user != creator) &&
+            (!isSoldOut()) &&
+            (count > 0) &&
+            (count <= MAX_BATCH_BUY) &&
+            (count >= minRequired) &&
+            (count <= maxNow);
+    }
+
+    /// @notice Quick ticket stats snapshot.
+    function getTicketStats()
+        external
+        view
+        returns (
+            uint256 sold,
+            uint256 rangeCount,
+            uint256 remaining,
+            bool unlimited
+        )
+    {
+        sold = getSold();
+        rangeCount = ticketRanges.length;
+
+        if (maxTickets == 0) {
+            unlimited = true;
+            remaining = 0;
+        } else {
+            unlimited = false;
+            remaining = sold >= maxTickets ? 0 : (uint256(maxTickets) - sold);
+        }
+    }
+
+    /// @notice Outcome/cancel/draw snapshot for dashboards.
+    function getOutcome()
         external
         view
         returns (
             Status st,
-            uint64 created,
-            uint64 dl,
-            uint256 sold,
-            uint256 price,
-            uint256 pot,
-            uint256 revenue,
-            uint64 minTix,
-            uint64 maxTix,
-            uint32 minBuy,
-            address win,
+            address winnerAddr,
             uint64 requestId,
             address provider,
-            uint64 drawingAt
+            uint64 drawingAt,
+            uint256 soldSnapshotAtDrawing,
+            uint256 soldSnapshotAtCancel,
+            uint64 canceledAtTs
         )
     {
         st = status;
-        created = createdAt;
-        dl = deadline;
-        sold = getSold();
-        price = ticketPrice;
-        pot = winningPot;
-        revenue = ticketRevenue;
-        minTix = minTickets;
-        maxTix = maxTickets;
-        minBuy = minPurchaseAmount;
-        win = winner;
+        winnerAddr = winner;
         requestId = entropyRequestId;
         provider = selectedProvider;
         drawingAt = drawingRequestedAt;
+        soldSnapshotAtDrawing = soldAtDrawing;
+        soldSnapshotAtCancel = soldAtCancel;
+        canceledAtTs = canceledAt;
     }
 
-    function getUserStatus(address user)
-        external
-        view
-        returns (
-            uint256 tickets,
-            uint256 claimableUsdc,
-            uint256 claimableEth,
-            bool isLastBuyer,
-            bool canBuy,
-            uint256 minBuyNow
-        )
-    {
-        tickets = ticketsOwned[user];
-        claimableUsdc = claimableFunds[user];
-        claimableEth = claimableNative[user];
-
-        uint256 len = ticketRanges.length;
-        isLastBuyer = (len > 0 && ticketRanges[len - 1].buyer == user);
-
-        canBuy = (status == Status.Open && block.timestamp < deadline && user != creator && !isSoldOut());
-
-        minBuyNow = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
-        if (!isLastBuyer) {
-            uint256 newMin = _minTicketsForNewRange();
-            if (newMin > minBuyNow) minBuyNow = newMin;
-        }
+    /// @notice Batch ticket ownership lookup (indexer/UI helper).
+    function getTicketsOwnedBatch(address[] calldata users) external view returns (uint256[] memory out) {
+        uint256 n = users.length;
+        out = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) out[i] = ticketsOwned[users[i]];
     }
 
-    function getActionFlags(address caller)
+    /// @notice Batch claimables lookup (indexer/UI helper).
+    function getClaimablesBatch(address[] calldata users)
         external
         view
-        returns (
-            bool canFinalize,
-            bool finalizeWouldCancel,
-            bool canCancel,
-            bool canEmergencyCancel,
-            uint256 finalizeFee,
-            uint256 timeLeftSec
-        )
-    {
-        finalizeFee = getFinalizeFee();
-        timeLeftSec = (block.timestamp >= deadline) ? 0 : (uint256(deadline) - block.timestamp);
-
-        bool open = (status == Status.Open);
-        bool drawing = (status == Status.Drawing);
-
-        bool expiredNow = isExpired();
-        bool soldOutNow = isSoldOut();
-        uint256 sold = getSold();
-
-        canFinalize = open && (expiredNow || soldOutNow);
-        finalizeWouldCancel = open && expiredNow && (sold < minTickets);
-
-        canCancel = open && (block.timestamp >= deadline) && (sold < minTickets);
-
-        if (!drawing) {
-            canEmergencyCancel = false;
-        } else {
-            bool privileged = (caller == creator);
-            if (privileged) {
-                canEmergencyCancel = block.timestamp > (uint256(drawingRequestedAt) + PRIVILEGED_HATCH_DELAY);
-            } else {
-                canEmergencyCancel = block.timestamp > (uint256(drawingRequestedAt) + PUBLIC_HATCH_DELAY);
-            }
-        }
-    }
-
-    function previewPayouts()
-        external
-        view
-        returns (
-            uint256 feePot,
-            uint256 feeRevenue,
-            uint256 winnerAmountIfDrawnNow,
-            uint256 creatorAmountIfDrawnNow,
-            uint256 protocolAmountIfDrawnNow
-        )
-    {
-        feePot = (winningPot * protocolFeePercent) / 100;
-        feeRevenue = (ticketRevenue * protocolFeePercent) / 100;
-
-        winnerAmountIfDrawnNow = winningPot - feePot;
-        creatorAmountIfDrawnNow = ticketRevenue - feeRevenue;
-        protocolAmountIfDrawnNow = feePot + feeRevenue;
-    }
-
-    function getClaimables(address[] calldata users)
-        external
-        view
-        returns (uint256[] memory usdcAmounts, uint256[] memory nativeAmounts, uint256[] memory tickets)
+        returns (uint256[] memory usdcAmounts, uint256[] memory nativeAmounts)
     {
         uint256 n = users.length;
         usdcAmounts = new uint256[](n);
         nativeAmounts = new uint256[](n);
-        tickets = new uint256[](n);
-
         for (uint256 i = 0; i < n; i++) {
             address u = users[i];
             usdcAmounts[i] = claimableFunds[u];
             nativeAmounts[i] = claimableNative[u];
-            tickets[i] = ticketsOwned[u];
         }
     }
 
@@ -534,7 +509,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // =========================
-    // Core functions (unchanged)
+    // Core functions (UNCHANGED)
     // =========================
 
     function buyTickets(uint256 count) external nonReentrant {
