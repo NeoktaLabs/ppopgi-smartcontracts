@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-contract RafflesRegistry {
+contract LotteryRegistry {
     error NotOwner();
     error ZeroAddress();
     error NotRegistrar();
@@ -153,7 +153,7 @@ contract RafflesRegistry {
     {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) {
-            return (new address, new uint256, new address, new uint64);
+            return (new address[](0), new uint256[](0), new address[](0), new uint64[](0));
         }
 
         uint256 end = start + limit;
@@ -186,7 +186,7 @@ contract RafflesRegistry {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) {
-            return (new address, new address, new uint64);
+            return (new address[](0), new address[](0), new uint64[](0));
         }
 
         uint256 end = start + limit;

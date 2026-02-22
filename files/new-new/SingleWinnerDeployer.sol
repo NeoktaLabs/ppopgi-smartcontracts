@@ -7,8 +7,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-import "./RafflesRegistry.sol";
-import "./SingleWinnerRaffle.sol";
+import "./LotteryRegistry.sol";
+import "./SingleWinnerLottery.sol";
 
 contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -59,7 +59,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         _;
     }
 
-    RafflesRegistry public immutable registry;
+    LotteryRegistry public immutable registry;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
     address public usdc;
@@ -104,7 +104,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         owner = _owner;
-        registry = RafflesRegistry(_registry);
+        registry = LotteryRegistry(_registry);
 
         usdc = _usdc;
         entropy = _entropy;

@@ -318,7 +318,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory lowerBounds, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-        if (start >= n || limit == 0) return (new address, new uint96, new uint96);
+        if (start >= n || limit == 0) return (new address[](0), new uint96[](0), new uint96[](0));
 
         uint256 end = start + limit;
         if (end > n) end = n;
