@@ -4,6 +4,9 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
+
 import "./RafflesRegistry.sol";
 import "./SingleWinnerRaffle.sol";
 
@@ -20,6 +23,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
 
+    // Kept as-is for backward compatibility
     event LotteryDeployed(
         address indexed lottery,
         address indexed creator,
@@ -37,6 +41,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets
     );
 
+    // Kept as-is for backward compatibility
     event ConfigUpdated(
         address usdc,
         address entropy,
@@ -45,6 +50,10 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address feeRecipient,
         uint256 protocolFeePercent
     );
+
+    // New: emits trusted roles (doesn't break old indexers)
+    event TrustedRolesUpdated(address finalizer, address guardian);
+    event RaffleRoles(address indexed raffle, address indexed finalizer, address indexed guardian);
 
     address public owner;
 
@@ -56,12 +65,17 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     RafflesRegistry public immutable registry;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
+    // Mutable config for FUTURE raffles only
     address public usdc;
     address public entropy;
     address public entropyProvider;
     uint32 public callbackGasLimit;
     address public feeRecipient;
     uint256 public protocolFeePercent;
+
+    // New: trusted-only roles for FUTURE raffles only
+    address public finalizer; // keeper/bot
+    address public guardian;  // e.g., Safe / ops multisig
 
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
@@ -77,7 +91,9 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address _entropyProvider,
         uint32 _callbackGasLimit,
         address _feeRecipient,
-        uint256 _protocolFeePercent
+        uint256 _protocolFeePercent,
+        address _finalizer,
+        address _guardian
     ) {
         if (
             _owner == address(0) ||
@@ -85,7 +101,9 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             _usdc == address(0) ||
             _entropy == address(0) ||
             _entropyProvider == address(0) ||
-            _feeRecipient == address(0)
+            _feeRecipient == address(0) ||
+            _finalizer == address(0) ||
+            _guardian == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -101,8 +119,12 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
 
+        finalizer = _finalizer;
+        guardian = _guardian;
+
         emit DeployerOwnershipTransferred(address(0), _owner);
         emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
+        emit TrustedRolesUpdated(_finalizer, _guardian);
     }
 
     function setConfig(
@@ -111,11 +133,19 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address _provider,
         uint32 _callbackGasLimit,
         address _feeRecipient,
-        uint256 _protocolFeePercent
+        uint256 _protocolFeePercent,
+        address _finalizer,
+        address _guardian
     ) external onlyOwner {
-        if (_usdc == address(0) || _entropy == address(0) || _provider == address(0) || _feeRecipient == address(0)) {
-            revert ZeroAddress();
-        }
+        if (
+            _usdc == address(0) ||
+            _entropy == address(0) ||
+            _provider == address(0) ||
+            _feeRecipient == address(0) ||
+            _finalizer == address(0) ||
+            _guardian == address(0)
+        ) revert ZeroAddress();
+
         if (_protocolFeePercent > 20) revert FeeTooHigh();
         if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
@@ -126,7 +156,11 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
 
+        finalizer = _finalizer;
+        guardian = _guardian;
+
         emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
+        emit TrustedRolesUpdated(_finalizer, _guardian);
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
@@ -144,10 +178,12 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             address provider,
             uint32 gasLimit,
             address feeTo,
-            uint256 feePercent
+            uint256 feePercent,
+            address _finalizer,
+            address _guardian
         )
     {
-        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent);
+        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent, finalizer, guardian);
     }
 
     function quoteEntropyFee() external view returns (uint256 fee) {
@@ -156,7 +192,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     function minTicketPriceFor(uint32 minPurchaseAmount) public pure returns (uint256) {
         uint256 minEntry = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
-        return (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry; // ceil(1e6/minEntry)
+        return Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry); // ceil(1e6/minEntry)
     }
 
     function validateInputs(
@@ -179,7 +215,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     }
 
     function buildParams(
-        address creator,
+        address creator_,
         string calldata name,
         uint256 ticketPrice,
         uint256 winningPot,
@@ -195,17 +231,18 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             callbackGasLimit: callbackGasLimit,
             feeRecipient: feeRecipient,
             protocolFeePercent: protocolFeePercent,
-            creator: creator,
+            creator: creator_,
             name: name,
             ticketPrice: ticketPrice,
             winningPot: winningPot,
             minTickets: minTickets,
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
-            minPurchaseAmount: minPurchaseAmount
+            minPurchaseAmount: minPurchaseAmount,
+            finalizer: finalizer,
+            guardian: guardian
         });
     }
-
 
     function createSingleWinnerLottery(
         string calldata name,
@@ -232,19 +269,21 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             minTickets: minTickets,
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
-            minPurchaseAmount: minPurchaseAmount
+            minPurchaseAmount: minPurchaseAmount,
+            finalizer: finalizer,
+            guardian: guardian
         });
 
         SingleWinnerRaffle lot = new SingleWinnerRaffle(params);
 
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
-
         lot.confirmFunding();
 
         lotteryAddr = address(lot);
         uint64 raffleDeadline = lot.deadline();
 
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
+            // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
         }
@@ -265,5 +304,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             minTickets,
             maxTickets
         );
+
+        emit RaffleRoles(lotteryAddr, finalizer, guardian);
     }
 }
