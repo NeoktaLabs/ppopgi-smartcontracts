@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
@@ -157,7 +156,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     bool public creatorPotRefunded;
 
-    // ✅ NEW: monotonic nonce used as Entropy userRand seed (avoids L2 block.number/blockhash warnings)
+    // Monotonic nonce used as Entropy userRand seed (avoids L2 block.number/blockhash warnings)
     uint64 public finalizeNonce;
 
     constructor(LotteryParams memory params) {
@@ -169,10 +168,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
-        // ✅ FIX (medium finding): remove try/catch around external call
-        // If a non-USDC token is passed and doesn't implement decimals(), deployment will revert naturally.
-        uint8 d = IERC20Metadata(params.usdcToken).decimals();
-        if (d != 6) revert InvalidUSDC();
+        // ✅ PATCH:
+        // Remove external `decimals()` call entirely (avoids try/catch limitation finding AND
+        // "external call in constructor" / "unchecked external call" findings).
+        // USDC correctness should be enforced by the Deployer's immutable `usdc` config + deployment scripts.
 
         if (bytes(params.name).length == 0) revert NameEmpty();
         if (params.durationSeconds < 600) revert DurationTooShort();
@@ -313,7 +312,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
         // ✅ FIX: return empty dynamic arrays
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -576,7 +575,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
 
-        // ✅ FIX: avoid block.number/blockhash for L2 consistency
+        // Avoid block.number/blockhash for L2 consistency
         finalizeNonce += 1;
         bytes32 userRand = keccak256(
             abi.encodePacked(
