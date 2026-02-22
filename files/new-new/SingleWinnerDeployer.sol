@@ -52,17 +52,12 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     event TrustedRolesUpdated(address finalizer, address guardian);
     event RaffleRoles(address indexed raffle, address indexed finalizer, address indexed guardian);
 
-    // ---- changed: make admin private to remove auto-generated owner() getter ----
+    // ---- changed: admin is private and NO external getter exists ----
     address private _admin;
 
     modifier onlyOwner() {
         if (msg.sender != _admin) revert NotOwner();
         _;
-    }
-
-    /// @notice Optional UX getter (NOT named owner()).
-    function admin() external view returns (address) {
-        return _admin;
     }
 
     LotteryRegistry public immutable registry;
