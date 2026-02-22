@@ -314,7 +314,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
         // ✅ FIX: return empty dynamic arrays
-        if (start >= n || limit == 0) return (new address, new uint96);
+        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
 
         uint256 end = start + limit;
         if (end > n) end = n;
