@@ -11,6 +11,15 @@ import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
  * @notice USDC-only single-winner raffle. No owner/admin functions.
  *         Native (ETH) is only used to pay the Entropy fee at finalize().
  *
+ * UX/RPC helpers added:
+ * - getSummary(): one-call core raffle state for cards/screens
+ * - getAccount(user): one-call wallet state (tickets + claimable + CTA flags)
+ * - getActions(user): one-call UI action booleans
+ * - isFinalizable() / isHatchOpen() helpers (bots + UI)
+ * - quoteEntropyFee() helper (bots + UI)
+ * - ticket range pagination helpers (count + page getter)
+ * - basic accounting helpers (contract USDC balance + surplus)
+ *
  * @dev Assumption: USDC always has 6 decimals (canonical USDC). We intentionally do NOT query decimals().
  */
 contract SingleWinnerRaffle is ReentrancyGuard {
@@ -206,6 +215,154 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         status = Status.FundingPending;
     }
+
+    // -------------------------
+    // UX / RPC helper views
+    // -------------------------
+
+    /// @notice Core state for UI cards/screens in a single call.
+    function getSummary()
+        external
+        view
+        returns (
+            Status _status,
+            string memory _name,
+            address _creator,
+            address _usdc,
+            uint64 _createdAt,
+            uint64 _deadline,
+            uint256 _ticketPrice,
+            uint256 _winningPot,
+            uint64 _minTickets,
+            uint64 _maxTickets,
+            uint32 _minPurchaseAmount,
+            uint256 _sold,
+            uint256 _ticketRevenue,
+            address _winner,
+            uint64 _entropyRequestId,
+            uint64 _drawingRequestedAt,
+            address _feeRecipient,
+            uint256 _protocolFeePercent
+        )
+    {
+        _status = status;
+        _name = name;
+        _creator = creator;
+        _usdc = address(usdcToken);
+        _createdAt = createdAt;
+        _deadline = deadline;
+        _ticketPrice = ticketPrice;
+        _winningPot = winningPot;
+        _minTickets = minTickets;
+        _maxTickets = maxTickets;
+        _minPurchaseAmount = minPurchaseAmount;
+        _sold = getSold();
+        _ticketRevenue = ticketRevenue;
+        _winner = winner;
+        _entropyRequestId = entropyRequestId;
+        _drawingRequestedAt = drawingRequestedAt;
+        _feeRecipient = feeRecipient;
+        _protocolFeePercent = protocolFeePercent;
+    }
+
+    /// @notice Per-user state + CTA flags for a connected wallet.
+    function getAccount(address user)
+        external
+        view
+        returns (
+            uint256 ownedTickets,
+            uint256 claimable,
+            bool canRefundTickets,
+            bool canWithdraw
+        )
+    {
+        ownedTickets = ticketsOwned[user];
+        claimable = claimableFunds[user];
+        canRefundTickets = (status == Status.Canceled && ownedTickets > 0);
+        canWithdraw = (claimable > 0);
+    }
+
+    /// @notice One-call action flags for UI (and bots).
+    function getActions(address user)
+        external
+        view
+        returns (
+            bool canBuy,
+            bool canFinalize,
+            bool canHatch,
+            bool canRefundTickets,
+            bool canWithdraw
+        )
+    {
+        canBuy = (status == Status.Open && block.timestamp < deadline && user != creator);
+        canFinalize = isFinalizable();
+        canHatch = isHatchOpen();
+        canRefundTickets = (status == Status.Canceled && ticketsOwned[user] > 0);
+        canWithdraw = (claimableFunds[user] > 0);
+    }
+
+    /// @notice True if raffle can be finalized (either cancel path or drawing request path).
+    function isFinalizable() public view returns (bool) {
+        if (status != Status.Open) return false;
+        if (entropyRequestId != 0) return false;
+        uint256 sold = getSold();
+        bool isFull = (maxTickets > 0 && sold >= maxTickets);
+        bool isExpired = (block.timestamp >= deadline);
+        return (isFull || isExpired);
+    }
+
+    /// @notice True if public hatch is available (drawing stuck).
+    function isHatchOpen() public view returns (bool) {
+        return (status == Status.Drawing && block.timestamp > uint256(drawingRequestedAt) + PUBLIC_HATCH_DELAY);
+    }
+
+    /// @notice Current entropy fee for this raffle finalize() (when it will request randomness).
+    function quoteEntropyFee() external view returns (uint256) {
+        return entropy.getFeeV2(callbackGasLimit);
+    }
+
+    /// @notice Ticket range count (for pagination/UI).
+    function getTicketRangesCount() external view returns (uint256) {
+        return ticketRanges.length;
+    }
+
+    /// @notice Paginated ticket ranges for indexers/UI.
+    function getTicketRanges(uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory buyers, uint96[] memory upperBounds)
+    {
+        uint256 n = ticketRanges.length;
+        if (start >= n || limit == 0) return (new address, new uint96);
+        uint256 end = start + limit;
+        if (end > n) end = n;
+
+        uint256 size = end - start;
+        buyers = new address[](size);
+        upperBounds = new uint96[](size);
+
+        for (uint256 i = 0; i < size; i++) {
+            TicketRange storage tr = ticketRanges[start + i];
+            buyers[i] = tr.buyer;
+            upperBounds[i] = tr.upperBound;
+        }
+    }
+
+    /// @notice Current USDC balance of the contract (informational).
+    function getContractUSDCBalance() external view returns (uint256) {
+        return usdcToken.balanceOf(address(this));
+    }
+
+    /// @notice Informational: current "surplus" (balance - reserved). Should usually be 0.
+    function getUnreservedUSDC() external view returns (uint256) {
+        uint256 bal = usdcToken.balanceOf(address(this));
+        if (bal <= totalReservedUSDC) return 0;
+        return bal - totalReservedUSDC;
+    }
+
+    // -------------------------
+    // Core functions
+    // -------------------------
 
     function confirmFunding() external {
         if (msg.sender != deployer) revert NotDeployer();
