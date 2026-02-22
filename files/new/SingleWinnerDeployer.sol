@@ -143,7 +143,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 maxTickets,
         uint64 durationSeconds,
         uint32 minPurchaseAmount
-    ) external view returns (SingleWinnerLottery.LotteryParams memory params) {
+    ) public view returns (SingleWinnerLottery.LotteryParams memory params) {
         params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
@@ -168,8 +168,27 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice UI helper: tells the user what the deploy will pull from their USDC balance (the pot).
-    function quoteCreate(uint256 winningPot) external view returns (address usdcToken, uint256 usdcAmountToTransfer) {
+    function quoteCreate(uint256 winningPot) public view returns (address usdcToken, uint256 usdcAmountToTransfer) {
         return (usdc, winningPot);
+    }
+
+    /// @notice One-call preview for frontends: quote + full params.
+    function previewCreate(
+        address creator,
+        string calldata name,
+        uint256 ticketPrice,
+        uint256 winningPot,
+        uint64 minTickets,
+        uint64 maxTickets,
+        uint64 durationSeconds,
+        uint32 minPurchaseAmount
+    )
+        external
+        view
+        returns (address usdcToken, uint256 usdcToTransfer, SingleWinnerLottery.LotteryParams memory params)
+    {
+        (usdcToken, usdcToTransfer) = quoteCreate(winningPot);
+        params = previewLotteryParams(creator, name, ticketPrice, winningPot, minTickets, maxTickets, durationSeconds, minPurchaseAmount);
     }
 
     function createSingleWinnerLottery(
@@ -214,7 +233,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
         uint64 dl = lot.deadline();
 
-        // Registry now reads creator() from the lottery itself (no creator param here).
+        // Registry reads creator() from the lottery itself.
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
             // ok
         } catch (bytes memory data) {
