@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/**
- * @title RafflesRegistry
- * @notice A minimal, “forever” on-chain registry for raffle instances.
- *
- * UX/RPC helpers added:
- * - total counts + pagination helpers
- * - batch metadata fetch for a page of raffles (typeId/creator/registeredAt in 1 call)
- * - batch fetch for a page of raffles-by-type (same metadata in 1 call)
- * - index lookup helpers
- */
 contract RafflesRegistry {
     error NotOwner();
     error ZeroAddress();
@@ -23,7 +13,6 @@ contract RafflesRegistry {
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
     event RegistrarSet(address indexed registrar, bool authorized);
 
-    // Kept name for backward compatibility with your indexers/consumers.
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
     address public owner;
@@ -45,7 +34,6 @@ contract RafflesRegistry {
         owner = newOwner;
     }
 
-    // Storage
     address[] public allLotteries;
     mapping(address => uint256) public typeIdOf;
     mapping(address => address) public creatorOf;
@@ -53,8 +41,6 @@ contract RafflesRegistry {
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
-    // Optional: index lookups (UX/indexer-friendly)
-    // 0 => "not found" sentinel; stored value is index+1
     mapping(address => uint256) public allIndexPlusOne;
     mapping(uint256 => mapping(address => uint256)) public typeIndexPlusOne;
 
@@ -75,18 +61,15 @@ contract RafflesRegistry {
         if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
         if (lottery.code.length == 0) revert NotContract();
 
-        // all list
         allLotteries.push(lottery);
         uint256 allIndex = allLotteries.length - 1;
         allIndexPlusOne[lottery] = allIndex + 1;
 
-        // metadata
         typeIdOf[lottery] = typeId;
         creatorOf[lottery] = creator;
         uint64 ts = uint64(block.timestamp);
         registeredAt[lottery] = ts;
 
-        // by-type list + index
         lotteriesByType[typeId].push(lottery);
         uint256 typeIndex = lotteriesByType[typeId].length - 1;
         typeIndexPlusOne[typeId][lottery] = typeIndex + 1;
@@ -94,9 +77,6 @@ contract RafflesRegistry {
         emit LotteryRegistered(allIndex, typeId, lottery, creator);
     }
 
-    // ---------------------------------------
-    // Basic views (kept)
-    // ---------------------------------------
 
     function isRegisteredLottery(address lottery) external view returns (bool) {
         return typeIdOf[lottery] != 0;
@@ -116,11 +96,6 @@ contract RafflesRegistry {
         return arr[index];
     }
 
-    // ---------------------------------------
-    // Pagination helpers
-    // ---------------------------------------
-
-    /// @notice Returns the computed [start,end) for paging.
     function getAllLotteriesPageBounds(uint256 start, uint256 limit) external view returns (uint256 end, uint256 total) {
         total = allLotteries.length;
         if (start >= total || limit == 0) return (start, total);
@@ -128,7 +103,6 @@ contract RafflesRegistry {
         if (end > total) end = total;
     }
 
-    /// @notice Returns the computed [start,end) for paging by type.
     function getLotteriesByTypePageBounds(uint256 typeId, uint256 start, uint256 limit)
         external
         view
@@ -142,7 +116,7 @@ contract RafflesRegistry {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address;
+        if (start >= n || limit == 0) return new address[](0);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -156,7 +130,7 @@ contract RafflesRegistry {
     function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address;
+        if (start >= n || limit == 0) return new address[](0);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -167,14 +141,6 @@ contract RafflesRegistry {
         }
     }
 
-    // ---------------------------------------
-    // Batch metadata getters (reduce RPC calls)
-    // ---------------------------------------
-
-    /**
-     * @notice Batch fetch registry metadata for a page of all raffles.
-     * @dev One RPC call returns address + typeId + creator + registeredAt arrays.
-     */
     function getAllLotteriesWithMeta(uint256 start, uint256 limit)
         external
         view
@@ -208,9 +174,6 @@ contract RafflesRegistry {
         }
     }
 
-    /**
-     * @notice Batch fetch registry metadata for a page of raffles within a type.
-     */
     function getLotteriesByTypeWithMeta(uint256 typeId, uint256 start, uint256 limit)
         external
         view
@@ -242,25 +205,18 @@ contract RafflesRegistry {
         }
     }
 
-    // ---------------------------------------
-    // Index lookup helpers (optional but handy)
-    // ---------------------------------------
-
-    /// @notice Returns (found, index) for the raffle in the global list.
     function getAllIndex(address lottery) external view returns (bool found, uint256 index) {
         uint256 v = allIndexPlusOne[lottery];
         if (v == 0) return (false, 0);
         return (true, v - 1);
     }
 
-    /// @notice Returns (found, index) for the raffle in the per-type list.
     function getTypeIndex(uint256 typeId, address lottery) external view returns (bool found, uint256 index) {
         uint256 v = typeIndexPlusOne[typeId][lottery];
         if (v == 0) return (false, 0);
         return (true, v - 1);
     }
 
-    /// @notice Convenience: returns the last registered raffle address (or zero if none).
     function getLatestLottery() external view returns (address) {
         uint256 n = allLotteries.length;
         return n == 0 ? address(0) : allLotteries[n - 1];

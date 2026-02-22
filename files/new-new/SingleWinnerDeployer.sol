@@ -7,19 +7,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./RafflesRegistry.sol";
 import "./SingleWinnerRaffle.sol";
 
-/**
- * @title SingleWinnerDeployer
- * @notice Factory for deploying SingleWinnerRaffle instances and registering them in RafflesRegistry.
- *         Config changes here affect ONLY future raffles.
- *
- * UX/RPC helpers added:
- * - "quote" functions for frontends/bots (fee, min buy, and min ticketPrice constraints)
- * - single-call config getter
- * - helper to build the exact params for a given creator+inputs (UI preview)
- *
- * @dev Updated for "no owner raffles":
- *      - Removed safeOwner and any transferOwnership() call on the raffle.
- */
 contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -33,7 +20,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
 
-    // Kept name for backward compatibility with your indexers/consumers.
     event LotteryDeployed(
         address indexed lottery,
         address indexed creator,
@@ -70,7 +56,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     RafflesRegistry public immutable registry;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
-    // Mutable config for FUTURE raffles only
     address public usdc;
     address public entropy;
     address public entropyProvider;
@@ -78,7 +63,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
-    // Keep in sync with SingleWinnerRaffle constants (UX quotes)
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
@@ -151,11 +135,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         owner = newOwner;
     }
 
-    // -------------------------
-    // UX / RPC helper views
-    // -------------------------
-
-    /// @notice Single-call read of current factory config (for UIs).
     function getConfig()
         external
         view
@@ -171,18 +150,15 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent);
     }
 
-    /// @notice Quote Entropy fee required to finalize (for a raffle deployed with current config).
     function quoteEntropyFee() external view returns (uint256 fee) {
         return IEntropyV2(entropy).getFeeV2(callbackGasLimit);
     }
 
-    /// @notice Min allowed ticketPrice given a minPurchaseAmount (so a new range costs at least 1 USDC).
     function minTicketPriceFor(uint32 minPurchaseAmount) public pure returns (uint256) {
         uint256 minEntry = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
         return (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry; // ceil(1e6/minEntry)
     }
 
-    /// @notice Validates basic bounds for UX (front-end can pre-check and avoid revert).
     function validateInputs(
         uint256 ticketPrice,
         uint256 winningPot,
@@ -202,7 +178,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         return (true, bytes32(0));
     }
 
-    /// @notice Builds the exact params struct for a given creator+inputs (UI preview / debugging).
     function buildParams(
         address creator,
         string calldata name,
@@ -231,9 +206,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         });
     }
 
-    // -------------------------
-    // Deployment
-    // -------------------------
 
     function createSingleWinnerLottery(
         string calldata name,
@@ -265,18 +237,14 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
         SingleWinnerRaffle lot = new SingleWinnerRaffle(params);
 
-        // Fund the pot (USDC) for this specific raffle.
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
 
-        // Open the raffle; only deployer can confirm.
         lot.confirmFunding();
 
         lotteryAddr = address(lot);
         uint64 raffleDeadline = lot.deadline();
 
-        // Register in registry (required for your UX / indexer).
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
-            // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
         }
