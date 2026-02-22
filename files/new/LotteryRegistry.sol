@@ -113,6 +113,25 @@ contract LotteryRegistry is Ownable2Step {
         isRegistered = (typeId != 0);
     }
 
+    /// @notice Single-call record incl. registrar provenance.
+    function getLotteryRecord(address lottery)
+        external
+        view
+        returns (
+            uint256 typeId,
+            address creator,
+            uint64 registeredAtTs,
+            bool isRegistered,
+            address registrar
+        )
+    {
+        typeId = typeIdOf[lottery];
+        creator = creatorOf[lottery];
+        registeredAtTs = registeredAt[lottery];
+        isRegistered = (typeId != 0);
+        registrar = registrarOf[lottery];
+    }
+
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) return new address;
@@ -163,6 +182,45 @@ contract LotteryRegistry is Ownable2Step {
             typeIds[i] = typeIdOf[lot];
             creators[i] = creatorOf[lot];
             registeredAtTs[i] = registeredAt[lot];
+        }
+    }
+
+    /// @notice Batch fetch registry info + registrar provenance.
+    function getLotteriesInfoWithRegistrars(address[] calldata lotteries)
+        external
+        view
+        returns (
+            uint256[] memory typeIds,
+            address[] memory creators,
+            uint64[] memory registeredAtTs,
+            address[] memory registrars
+        )
+    {
+        uint256 n = lotteries.length;
+        typeIds = new uint256[](n);
+        creators = new address[](n);
+        registeredAtTs = new uint64[](n);
+        registrars = new address[](n);
+
+        for (uint256 i = 0; i < n; i++) {
+            address lot = lotteries[i];
+            typeIds[i] = typeIdOf[lot];
+            creators[i] = creatorOf[lot];
+            registeredAtTs[i] = registeredAt[lot];
+            registrars[i] = registrarOf[lot];
+        }
+    }
+
+    /// @notice Batch counts by typeId (indexer/UI helper).
+    function getLotteriesCountByType(uint256[] calldata typeIds)
+        external
+        view
+        returns (uint256[] memory counts)
+    {
+        uint256 n = typeIds.length;
+        counts = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            counts[i] = lotteriesByType[typeIds[i]].length;
         }
     }
 
