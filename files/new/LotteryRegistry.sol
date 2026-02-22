@@ -10,7 +10,7 @@ contract LotteryRegistry is Ownable2Step {
     error InvalidTypeId();
     error NotContract();
 
-    // New: creator integrity errors
+    // Creator integrity errors
     error CreatorQueryFailed();
     error InvalidCreator();
 
@@ -69,6 +69,10 @@ contract LotteryRegistry is Ownable2Step {
         if (creator == address(0)) revert InvalidCreator();
     }
 
+    // =========================
+    // Basic helpers
+    // =========================
+
     function isRegisteredLottery(address lottery) external view returns (bool) {
         return typeIdOf[lottery] != 0;
     }
@@ -125,6 +129,100 @@ contract LotteryRegistry is Ownable2Step {
         page = new address[](end - start);
         for (uint256 i = start; i < end; i++) {
             page[i - start] = arr[i];
+        }
+    }
+
+    // =========================
+    // Added UX/indexer helpers
+    // =========================
+
+    /// @notice Batch fetch registry info for many lotteries (indexer/UI friendly).
+    function getLotteriesInfo(address[] calldata lotteries)
+        external
+        view
+        returns (uint256[] memory typeIds, address[] memory creators, uint64[] memory registeredAtTs)
+    {
+        uint256 n = lotteries.length;
+        typeIds = new uint256[](n);
+        creators = new address[](n);
+        registeredAtTs = new uint64[](n);
+
+        for (uint256 i = 0; i < n; i++) {
+            address lot = lotteries[i];
+            typeIds[i] = typeIdOf[lot];
+            creators[i] = creatorOf[lot];
+            registeredAtTs[i] = registeredAt[lot];
+        }
+    }
+
+    /// @notice Page through all lotteries and return addresses + stored metadata in one call.
+    function getAllLotteriesPageInfo(uint256 start, uint256 limit)
+        external
+        view
+        returns (
+            address[] memory lotteries,
+            uint256[] memory typeIds,
+            address[] memory creators,
+            uint64[] memory timestamps
+        )
+    {
+        uint256 n = allLotteries.length;
+        if (start >= n || limit == 0) {
+            return (new address, new uint256, new address, new uint64);
+        }
+
+        uint256 end = start + limit;
+        if (end > n) end = n;
+
+        uint256 m = end - start;
+        lotteries = new address[](m);
+        typeIds = new uint256[](m);
+        creators = new address[](m);
+        timestamps = new uint64[](m);
+
+        for (uint256 i = 0; i < m; i++) {
+            address lot = allLotteries[start + i];
+            lotteries[i] = lot;
+            typeIds[i] = typeIdOf[lot];
+            creators[i] = creatorOf[lot];
+            timestamps[i] = registeredAt[lot];
+        }
+    }
+
+    /// @notice Page through a type and return addresses + stored metadata in one call.
+    function getLotteriesByTypePageInfo(uint256 typeId, uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory lotteries, address[] memory creators, uint64[] memory timestamps)
+    {
+        address[] storage arr = lotteriesByType[typeId];
+        uint256 n = arr.length;
+        if (start >= n || limit == 0) {
+            return (new address, new address, new uint64);
+        }
+
+        uint256 end = start + limit;
+        if (end > n) end = n;
+
+        uint256 m = end - start;
+        lotteries = new address[](m);
+        creators = new address[](m);
+        timestamps = new uint64[](m);
+
+        for (uint256 i = 0; i < m; i++) {
+            address lot = arr[start + i];
+            lotteries[i] = lot;
+            creators[i] = creatorOf[lot];
+            timestamps[i] = registeredAt[lot];
+        }
+    }
+
+    /// @notice Batch-check registrar flags (admin UI helper).
+    function areRegistrars(address[] calldata addrs) external view returns (bool[] memory out) {
+        uint256 n = addrs.length;
+        out = new bool[](n);
+        for (uint256 i = 0; i < n; i++) {
+            out[i] = isRegistrar[addrs[i]];
         }
     }
 }
