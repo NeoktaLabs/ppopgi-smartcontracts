@@ -54,7 +54,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     uint256 public protocolFeePercent;
 
     // Option B: deployer is the source of truth for creator
-    mapping(address => address) public creatorOfLottery;
+    mapping(address => address) private _creatorOfLottery;
 
     constructor(
         address initialOwner,
@@ -113,7 +113,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
     /// @notice Called by the Registry (Option B) to read creator for a lottery this deployer created.
     function creatorOfLottery(address lottery) external view returns (address) {
-        address c = creatorOfLottery[lottery];
+        address c = _creatorOfLottery[lottery];
         if (c == address(0)) revert UnknownLottery();
         return c;
     }
@@ -238,7 +238,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         lotteryAddr = address(lot);
 
         // Option B: record creator mapping BEFORE registry registration
-        creatorOfLottery[lotteryAddr] = msg.sender;
+        _creatorOfLottery[lotteryAddr] = msg.sender;
 
         IERC20(usdc).safeTransferFrom(msg.sender, lotteryAddr, winningPot);
         lot.confirmFunding();
