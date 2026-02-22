@@ -7,6 +7,11 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./RafflesRegistry.sol";
 import "./SingleWinnerRaffle.sol";
 
+/**
+ * @title SingleWinnerDeployer
+ * @notice Factory for deploying SingleWinnerRaffle instances and registering them in RafflesRegistry.
+ *         Config changes here affect ONLY future raffles.
+ */
 contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -20,6 +25,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
 
+    // Kept name for backward compatibility with your indexers/consumers.
     event LotteryDeployed(
         address indexed lottery,
         address indexed creator,
@@ -47,6 +53,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     );
 
     address public owner;
+
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
         _;
@@ -56,6 +63,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public immutable safeOwner;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
+    // Mutable config for FUTURE raffles only
     address public usdc;
     address public entropy;
     address public entropyProvider;
@@ -75,8 +83,13 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint256 _protocolFeePercent
     ) {
         if (
-            _owner == address(0) || _registry == address(0) || _safeOwner == address(0) ||
-            _usdc == address(0) || _entropy == address(0) || _entropyProvider == address(0) || _feeRecipient == address(0)
+            _owner == address(0) ||
+            _registry == address(0) ||
+            _safeOwner == address(0) ||
+            _usdc == address(0) ||
+            _entropy == address(0) ||
+            _entropyProvider == address(0) ||
+            _feeRecipient == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -94,7 +107,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         protocolFeePercent = _protocolFeePercent;
 
         emit DeployerOwnershipTransferred(address(0), _owner);
-        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, callbackGasLimit, _feeRecipient, _protocolFeePercent);
+        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
     }
 
     function setConfig(
@@ -102,21 +115,23 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address _entropy,
         address _provider,
         uint32 _callbackGasLimit,
-        address _fee,
-        uint256 _percent
+        address _feeRecipient,
+        uint256 _protocolFeePercent
     ) external onlyOwner {
-        if (_usdc == address(0) || _entropy == address(0) || _provider == address(0) || _fee == address(0)) revert ZeroAddress();
-        if (_percent > 20) revert FeeTooHigh();
+        if (_usdc == address(0) || _entropy == address(0) || _provider == address(0) || _feeRecipient == address(0)) {
+            revert ZeroAddress();
+        }
+        if (_protocolFeePercent > 20) revert FeeTooHigh();
         if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         usdc = _usdc;
         entropy = _entropy;
         entropyProvider = _provider;
         callbackGasLimit = _callbackGasLimit;
-        feeRecipient = _fee;
-        protocolFeePercent = _percent;
+        feeRecipient = _feeRecipient;
+        protocolFeePercent = _protocolFeePercent;
 
-        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _fee, _percent);
+        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
@@ -155,13 +170,19 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
         SingleWinnerRaffle lot = new SingleWinnerRaffle(params);
 
+        // Fund the pot (USDC) for this specific raffle.
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
+
+        // Open the raffle; only deployer can confirm.
         lot.confirmFunding();
+
+        // Hand ownership to your Safe (operational admin / emergency hatch privileged path).
         lot.transferOwnership(safeOwner);
 
         lotteryAddr = address(lot);
-        uint64 deadline = lot.deadline();
+        uint64 raffleDeadline = lot.deadline();
 
+        // Register in registry (required for your UX / indexer).
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr, msg.sender) {
             // ok
         } catch (bytes memory data) {
@@ -180,7 +201,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             callbackGasLimit,
             feeRecipient,
             protocolFeePercent,
-            deadline,
+            raffleDeadline,
             minTickets,
             maxTickets
         );
