@@ -12,6 +12,11 @@ import "./SingleWinnerRaffle.sol";
  * @notice Factory for deploying SingleWinnerRaffle instances and registering them in RafflesRegistry.
  *         Config changes here affect ONLY future raffles.
  *
+ * UX/RPC helpers added:
+ * - "quote" functions for frontends/bots (fee, min buy, and min ticketPrice constraints)
+ * - single-call config getter
+ * - helper to build the exact params for a given creator+inputs (UI preview)
+ *
  * @dev Updated for "no owner raffles":
  *      - Removed safeOwner and any transferOwnership() call on the raffle.
  */
@@ -72,6 +77,13 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     uint32 public callbackGasLimit;
     address public feeRecipient;
     uint256 public protocolFeePercent;
+
+    // Keep in sync with SingleWinnerRaffle constants (UX quotes)
+    uint256 public constant MAX_BATCH_BUY = 1000;
+    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
+    uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
+    uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
+    uint64 public constant MAX_DURATION = 365 days;
 
     constructor(
         address _owner,
@@ -138,6 +150,90 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         emit DeployerOwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
+
+    // -------------------------
+    // UX / RPC helper views
+    // -------------------------
+
+    /// @notice Single-call read of current factory config (for UIs).
+    function getConfig()
+        external
+        view
+        returns (
+            address usdcToken,
+            address entropyContract,
+            address provider,
+            uint32 gasLimit,
+            address feeTo,
+            uint256 feePercent
+        )
+    {
+        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent);
+    }
+
+    /// @notice Quote Entropy fee required to finalize (for a raffle deployed with current config).
+    function quoteEntropyFee() external view returns (uint256 fee) {
+        return IEntropyV2(entropy).getFeeV2(callbackGasLimit);
+    }
+
+    /// @notice Min allowed ticketPrice given a minPurchaseAmount (so a new range costs at least 1 USDC).
+    function minTicketPriceFor(uint32 minPurchaseAmount) public pure returns (uint256) {
+        uint256 minEntry = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
+        return (MIN_NEW_RANGE_COST + minEntry - 1) / minEntry; // ceil(1e6/minEntry)
+    }
+
+    /// @notice Validates basic bounds for UX (front-end can pre-check and avoid revert).
+    function validateInputs(
+        uint256 ticketPrice,
+        uint256 winningPot,
+        uint64 minTickets,
+        uint64 maxTickets,
+        uint64 durationSeconds,
+        uint32 minPurchaseAmount
+    ) external pure returns (bool ok, bytes32 reason) {
+        if (durationSeconds < 600) return (false, "DURATION_TOO_SHORT");
+        if (durationSeconds > MAX_DURATION) return (false, "DURATION_TOO_LONG");
+        if (ticketPrice == 0 || ticketPrice > MAX_TICKET_PRICE) return (false, "BAD_TICKET_PRICE");
+        if (winningPot == 0 || winningPot > MAX_POT_SIZE) return (false, "BAD_POT");
+        if (minTickets == 0) return (false, "MIN_TICKETS_ZERO");
+        if (minPurchaseAmount > MAX_BATCH_BUY) return (false, "MIN_BUY_TOO_LARGE");
+        if (maxTickets != 0 && maxTickets < minTickets) return (false, "MAX_LT_MIN");
+        if (ticketPrice < minTicketPriceFor(minPurchaseAmount)) return (false, "BATCH_TOO_CHEAP");
+        return (true, bytes32(0));
+    }
+
+    /// @notice Builds the exact params struct for a given creator+inputs (UI preview / debugging).
+    function buildParams(
+        address creator,
+        string calldata name,
+        uint256 ticketPrice,
+        uint256 winningPot,
+        uint64 minTickets,
+        uint64 maxTickets,
+        uint64 durationSeconds,
+        uint32 minPurchaseAmount
+    ) external view returns (SingleWinnerRaffle.LotteryParams memory params) {
+        params = SingleWinnerRaffle.LotteryParams({
+            usdcToken: usdc,
+            entropy: entropy,
+            entropyProvider: entropyProvider,
+            callbackGasLimit: callbackGasLimit,
+            feeRecipient: feeRecipient,
+            protocolFeePercent: protocolFeePercent,
+            creator: creator,
+            name: name,
+            ticketPrice: ticketPrice,
+            winningPot: winningPot,
+            minTickets: minTickets,
+            maxTickets: maxTickets,
+            durationSeconds: durationSeconds,
+            minPurchaseAmount: minPurchaseAmount
+        });
+    }
+
+    // -------------------------
+    // Deployment
+    // -------------------------
 
     function createSingleWinnerLottery(
         string calldata name,
