@@ -61,7 +61,6 @@ contract LotteryRegistry is Ownable2Step {
 
     /// @dev Reads `creator()` from a lottery with bounded-gas staticcall to avoid griefing.
     function _readCreator(address lottery) internal view returns (address creator) {
-        // bytes4(keccak256("creator()")) == 0x02fb0c5e
         (bool ok, bytes memory ret) = lottery.staticcall{gas: 25_000}(hex"02fb0c5e");
         if (!ok || ret.length < 32) revert CreatorQueryFailed();
 
@@ -89,7 +88,6 @@ contract LotteryRegistry is Ownable2Step {
         return lotteriesByType[typeId][index];
     }
 
-    /// @notice Convenience: single-call info fetch for UIs/scripts.
     function getLotteryInfo(address lottery)
         external
         view
@@ -103,7 +101,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -121,7 +119,7 @@ contract LotteryRegistry is Ownable2Step {
     {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -136,7 +134,6 @@ contract LotteryRegistry is Ownable2Step {
     // Added UX/indexer helpers
     // =========================
 
-    /// @notice Batch fetch registry info for many lotteries (indexer/UI friendly).
     function getLotteriesInfo(address[] calldata lotteries)
         external
         view
@@ -155,7 +152,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    /// @notice Page through all lotteries and return addresses + stored metadata in one call.
     function getAllLotteriesPageInfo(uint256 start, uint256 limit)
         external
         view
@@ -189,7 +185,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    /// @notice Page through a type and return addresses + stored metadata in one call.
     function getLotteriesByTypePageInfo(uint256 typeId, uint256 start, uint256 limit)
         external
         view
@@ -217,7 +212,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    /// @notice Batch-check registrar flags (admin UI helper).
     function areRegistrars(address[] calldata addrs) external view returns (bool[] memory out) {
         uint256 n = addrs.length;
         out = new bool[](n);
