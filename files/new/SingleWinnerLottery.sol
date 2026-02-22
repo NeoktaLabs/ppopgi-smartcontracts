@@ -157,6 +157,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     bool public creatorPotRefunded;
 
+    // ✅ NEW: monotonic nonce used as Entropy userRand seed (avoids L2 block.number/blockhash warnings)
+    uint64 public finalizeNonce;
+
     constructor(LotteryParams memory params) {
         if (params.entropy == address(0)) revert InvalidEntropy();
         if (params.usdcToken == address(0)) revert InvalidUSDC();
@@ -310,6 +313,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
+        // ✅ FIX: return empty dynamic arrays
         if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
@@ -573,8 +577,18 @@ contract SingleWinnerLottery is ReentrancyGuard {
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
 
-        bytes32 userRand =
-            keccak256(abi.encodePacked(address(this), sold, ticketRevenue, blockhash(block.number - 1)));
+        // ✅ FIX: avoid block.number/blockhash for L2 consistency
+        finalizeNonce += 1;
+        bytes32 userRand = keccak256(
+            abi.encodePacked(
+                address(this),
+                msg.sender,
+                sold,
+                ticketRevenue,
+                deadline,
+                finalizeNonce
+            )
+        );
 
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
