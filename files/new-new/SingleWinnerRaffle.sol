@@ -16,7 +16,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         address entropyProvider;
         uint32 callbackGasLimit;
         address feeRecipient;
-        uint256 protocolFeePercent; // 0..20
+        uint256 protocolFeePercent;
         address creator;
         string name;
         uint256 ticketPrice;
@@ -114,13 +114,10 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
     uint256 public constant MAX_BATCH_BUY = 1000;
 
-    // Updated as requested
     uint256 public constant MAX_RANGES = 100_000;
 
-    // Base min cost to create a NEW range (USDC 6 decimals)
     uint256 public constant MIN_NEW_RANGE_COST_BASE = 1_000_000; // 1 USDC
 
-    // Ramp: +1 USDC every 10,000 ranges
     uint256 public constant RANGE_STEP = 10_000;
     uint256 public constant RANGE_COST_STEP = 1_000_000; // 1 USDC
 
@@ -200,7 +197,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
-        // At deployment, tier is 0 => base min range cost.
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST_BASE, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -230,33 +226,24 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
-    // -------------------------
-    // Range policy + UX getters
-    // -------------------------
-
-    /// @notice Minimum totalCost required to CREATE a new range at a given rangeCount (before adding the new one).
     function minNewRangeCostAt(uint256 rangeCount) public pure returns (uint256) {
         uint256 tier = rangeCount / RANGE_STEP; // 0..9 when MAX_RANGES=100k
         return MIN_NEW_RANGE_COST_BASE + (tier * RANGE_COST_STEP);
     }
 
-    /// @notice Minimum totalCost required to create a new range RIGHT NOW.
     function minNewRangeCostNow() public view returns (uint256) {
         return minNewRangeCostAt(ticketRanges.length);
     }
 
-    /// @notice Minimum ticket count required (at current ticketPrice) to be allowed to create a new range RIGHT NOW.
     function minTicketsToOpenNewRangeNow() external view returns (uint256) {
         return Math.ceilDiv(minNewRangeCostNow(), ticketPrice);
     }
 
-    /// @notice Whether a buyer would create a new range (i.e., buyer != last buyer).
     function wouldCreateNewRange(address buyer) public view returns (bool) {
         uint256 len = ticketRanges.length;
         return (len == 0 || ticketRanges[len - 1].buyer != buyer);
     }
 
-    /// @notice High-level range policy constants in one call.
     function getRangePolicy()
         external
         pure
@@ -270,7 +257,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         return (MAX_RANGES, RANGE_STEP, MIN_NEW_RANGE_COST_BASE, RANGE_COST_STEP);
     }
 
-    /// @notice Current tier info to show users why min changes over time.
     function getRangeTierInfo()
         external
         view
@@ -290,12 +276,10 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         rangesUntilNextTier = (rangeCount >= nextTierAtRangeCount) ? 0 : (nextTierAtRangeCount - rangeCount);
     }
 
-    /// @notice Range count.
     function getTicketRangesCount() external view returns (uint256) {
         return ticketRanges.length;
     }
 
-    /// @notice Get a single range with explicit lowerBound/size (better UX than only upperBound).
     function getRangeAt(uint256 index)
         external
         view
@@ -311,7 +295,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         size = upperBound - lowerBound;
     }
 
-    /// @notice Paginated ranges including lowerBounds for UI rendering.
     function getRangesWithBounds(uint256 start, uint256 limit)
         external
         view
@@ -337,7 +320,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         }
     }
 
-    /// @notice Find which range owns a ticket index (0..sold-1). Useful for explorers/debug/UI.
     function findRangeForTicket(uint256 ticketIndex) external view returns (uint256 rangeIndex, address buyer) {
         uint256 sold = getSold();
         if (ticketIndex >= sold) revert AccountingMismatch();
@@ -356,11 +338,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         return low;
     }
 
-    // -------------------------
-    // Added: ALL UX getters (single-call UI + actions + odds + buy quote + progress + accounting + latest range)
-    // -------------------------
-
-    /// @notice Core state for UIs in one call.
     function getState()
         external
         view
@@ -385,7 +362,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         _winner = winner;
     }
 
-    /// @notice Full summary snapshot (one-call indexer).
     function getSummary()
         external
         view
@@ -434,7 +410,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         _guardian = guardian;
     }
 
-    /// @notice User-specific data in one call.
     function getUserStats(address user)
         external
         view
@@ -453,7 +428,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         canWithdraw = (claimable > 0);
     }
 
-    /// @notice Action flags for UI buttons.
     function getActions(address user)
         external
         view
@@ -472,7 +446,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         canWithdraw = (claimableFunds[user] > 0);
     }
 
-    /// @notice Odds helper: returns (sold, userTickets, oddsBps) where oddsBps is 0..10000 (basis points).
     function getOdds(address user)
         external
         view
@@ -482,14 +455,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         userTickets = ticketsOwned[user];
         if (sold == 0 || userTickets == 0) return (sold, userTickets, 0);
 
-        // Clamp in case of any mismatch (shouldn't happen).
         if (userTickets > sold) userTickets = sold;
 
         oddsBps = Math.mulDiv(userTickets, 10_000, sold);
         if (oddsBps > 10_000) oddsBps = 10_000;
     }
 
-    /// @notice Countdown + progress for UI.
     function getProgress()
         external
         view
@@ -524,7 +495,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         }
     }
 
-    /// @notice Accounting snapshot for monitoring/trust.
     function getAccounting()
         external
         view
@@ -537,7 +507,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         _ticketRevenue = ticketRevenue;
     }
 
-    /// @notice Quote a buy for UI (especially important with dynamic range min-cost).
     function quoteBuy(address buyer, uint256 count)
         external
         view
@@ -566,7 +535,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         postRangeCount = createsNewRange ? (ranges + 1) : ranges;
     }
 
-    /// @notice Latest range details for quick UI display.
     function getLatestRange()
         external
         view
@@ -583,10 +551,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         lowerBound = (rangeIndex == 0) ? 0 : ticketRanges[rangeIndex - 1].upperBound;
         size = upperBound - lowerBound;
     }
-
-    // -------------------------
-    // Core
-    // -------------------------
 
     function isFinalizable() public view returns (bool) {
         if (status != Status.Open) return false;
@@ -637,8 +601,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
-
-            // Dynamic min cost: +1 USDC every 10k ranges.
             uint256 minCost = minNewRangeCostAt(ticketRanges.length);
             if (totalCost < minCost) revert BatchTooCheap();
         }
