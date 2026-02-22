@@ -164,7 +164,7 @@ contract LotteryRegistry is Ownable2Step {
     {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) {
-            return (new address, new uint256, new address, new uint64);
+            return (new address[](0), new uint256[](0), new address[](0), new uint64[](0));
         }
 
         uint256 end = start + limit;
@@ -193,7 +193,7 @@ contract LotteryRegistry is Ownable2Step {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) {
-            return (new address, new address, new uint64);
+            return (new address[](0), new address[](0), new uint64[](0));
         }
 
         uint256 end = start + limit;
