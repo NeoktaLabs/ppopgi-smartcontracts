@@ -17,7 +17,7 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     error NotAuthorizedRegistrar();
     error InvalidCallbackGasLimit();
     error RegistryRegistrationFailed(bytes lowLevelData);
-    error UnknownLottery(); // for creatorOfLottery queries
+    error UnknownLottery();
 
     event LotteryDeployed(
         address indexed lottery,
@@ -46,14 +46,12 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     address public immutable usdc;
     uint32 public immutable callbackGasLimit;
 
-    // ---- mutable configs (only affect NEW lotteries) ----
     address public entropy;
     address public entropyProvider;
 
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
-    // Option B: deployer is the source of truth for creator
     mapping(address => address) private _creatorOfLottery;
 
     constructor(
@@ -92,7 +90,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
     }
 
-    /// @notice Updates protocol fees for NEW lotteries only.
     function setFeeConfig(address _feeRecipient, uint256 _protocolFeePercent) external onlyOwner {
         if (_feeRecipient == address(0)) revert ZeroAddress();
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -103,7 +100,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit FeeConfigUpdated(_feeRecipient, _protocolFeePercent);
     }
 
-    /// @notice Updates Entropy contract + provider for NEW lotteries only.
     function setEntropyConfig(address _entropy, address _entropyProvider) external onlyOwner {
         if (_entropy == address(0) || _entropyProvider == address(0)) revert ZeroAddress();
         entropy = _entropy;
@@ -111,23 +107,16 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         emit EntropyConfigUpdated(_entropy, _entropyProvider);
     }
 
-    // =========================
-    // Option B creator source
-    // =========================
-
-    /// @notice Called by the Registry (Option B) to read creator for a lottery this deployer created.
     function creatorOfLottery(address lottery) external view returns (address) {
         address c = _creatorOfLottery[lottery];
         if (c == address(0)) revert UnknownLottery();
         return c;
     }
 
-    /// @notice Non-reverting getter (UIs/indexers prefer this).
     function getCreatorOfLotteryOrZero(address lottery) external view returns (address creator) {
         return _creatorOfLottery[lottery];
     }
 
-    /// @notice Batch non-reverting creator lookup.
     function getCreatorsForLotteries(address[] calldata lotteries) external view returns (address[] memory creators) {
         uint256 n = lotteries.length;
         creators = new address[](n);
@@ -136,7 +125,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    /// @notice Batch lookup with an explicit known flag.
     function getCreatorsForLotteriesWithKnown(address[] calldata lotteries)
         external
         view
@@ -153,9 +141,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    // =========================
-    // UX helpers
-    // =========================
 
     function getCurrentConfig()
         external
@@ -273,7 +258,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         SingleWinnerLottery lot = new SingleWinnerLottery(params);
         lotteryAddr = address(lot);
 
-        // Option B: record creator mapping BEFORE registry registration
         _creatorOfLottery[lotteryAddr] = msg.sender;
 
         IERC20(usdc).safeTransferFrom(msg.sender, lotteryAddr, winningPot);
@@ -282,7 +266,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         uint64 dl = lot.deadline();
 
         try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
-            // ok
         } catch (bytes memory data) {
             revert RegistryRegistrationFailed(data);
         }

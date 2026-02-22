@@ -3,7 +3,6 @@ pragma solidity 0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 
-/// @dev Minimal interface the Registry uses to query the registrar (deployer).
 interface ICreatorSource {
     function creatorOfLottery(address lottery) external view returns (address);
 }
@@ -15,7 +14,6 @@ contract LotteryRegistry is Ownable2Step {
     error InvalidTypeId();
     error NotContract();
 
-    // Option B integrity errors (registrar is source of truth)
     error CreatorQueryFailed();
     error InvalidCreator();
 
@@ -31,7 +29,6 @@ contract LotteryRegistry is Ownable2Step {
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
-    // Optional provenance: who registered this lottery
     mapping(address => address) public registrarOf;
 
     modifier onlyRegistrar() {
@@ -43,7 +40,6 @@ contract LotteryRegistry is Ownable2Step {
         if (initialOwner == address(0)) revert ZeroAddress();
     }
 
-    /// @notice Owner can add/remove registrar(s) at any time (affects only NEW registrations).
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
         if (authorized) {
             if (registrar == address(0)) revert ZeroAddress();
@@ -54,7 +50,6 @@ contract LotteryRegistry is Ownable2Step {
         emit RegistrarSet(registrar, authorized);
     }
 
-    /// @notice Registrar registers a lottery. Creator is READ from the registrar (deployer), not the lottery.
     function registerLottery(uint256 typeId, address lottery) external onlyRegistrar {
         if (lottery == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();
@@ -74,8 +69,6 @@ contract LotteryRegistry is Ownable2Step {
         emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
     }
 
-    /// @dev Reads creator from the registrar (trusted deployer).
-    ///      Using try/catch keeps the registry resilient if the registrar reverts unexpectedly.
     function _readCreatorFromRegistrar(address registrar, address lottery) internal view returns (address creator) {
         try ICreatorSource(registrar).creatorOfLottery(lottery) returns (address c) {
             creator = c;
@@ -117,7 +110,6 @@ contract LotteryRegistry is Ownable2Step {
         isRegistered = (typeId != 0);
     }
 
-    /// @notice Single-call record incl. registrar provenance.
     function getLotteryRecord(address lottery)
         external
         view
@@ -167,9 +159,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    // =========================
-    // Added UX/indexer helpers
-    // =========================
 
     function getLotteriesInfo(address[] calldata lotteries)
         external
@@ -189,7 +178,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    /// @notice Batch fetch registry info + registrar provenance.
     function getLotteriesInfoWithRegistrars(address[] calldata lotteries)
         external
         view
@@ -215,7 +203,6 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    /// @notice Batch counts by typeId (indexer/UI helper).
     function getLotteriesCountByType(uint256[] calldata typeIds)
         external
         view
