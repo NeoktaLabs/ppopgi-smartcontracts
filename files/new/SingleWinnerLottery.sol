@@ -247,7 +247,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return getSold() < minTickets;
     }
 
-    /// @notice Returns whether the emergency hatch is currently available and at what timestamps it becomes available.
     function isEmergencyCancelable()
         external
         view
@@ -267,7 +266,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketPrice * count;
     }
 
-    /// @notice Remaining tickets until cap. If maxTickets==0, returns (0,true).
     function remainingTickets() external view returns (uint256 remaining, bool unlimited) {
         if (maxTickets == 0) return (0, true);
         uint256 sold = getSold();
@@ -275,7 +273,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return (uint256(maxTickets) - sold, false);
     }
 
-    /// @notice Max tickets buyable in a single call right now (respects caps + MAX_BATCH_BUY).
     function maxBuyableNow() external view returns (uint256 maxNow) {
         if (status != Status.Open) return 0;
         if (block.timestamp >= deadline) return 0;
@@ -295,19 +292,16 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return uint256(deadline) - block.timestamp;
     }
 
-    /// @notice Current fee required to call finalize() successfully (for the configured callbackGasLimit).
     function getFinalizeFee() public view returns (uint256) {
         return entropy.getFeeV2(callbackGasLimit);
     }
 
-    /// @notice Convenience finalize wrapper: requires exact fee (no refunds, clean wallet UX).
     function finalizeExact() external payable nonReentrant {
         uint256 fee = getFinalizeFee();
         if (msg.value != fee) revert InvalidFeeAmount(fee, msg.value);
         _finalizeInternal(fee, msg.value);
     }
 
-    /// @notice Convenience finalize wrapper: protects user from fee spikes above maxFee. Refunds overpay as usual.
     function finalizeWithMaxFee(uint256 maxFee) external payable nonReentrant {
         uint256 fee = getFinalizeFee();
         if (fee > maxFee) revert FeeExceedsMax(fee, maxFee);
@@ -315,7 +309,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         _finalizeInternal(fee, msg.value);
     }
 
-    /// @notice Paginated getter for ticket ranges (client-friendly: two arrays).
     function getTicketRanges(uint256 start, uint256 limit)
         external
         view
@@ -323,7 +316,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         uint256 n = ticketRanges.length;
 
-        // ✅ FIX: must return empty dynamic arrays, not `new address` / `new uint96`
+        // ✅ Correct empty arrays
         if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
@@ -343,7 +336,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketRanges.length;
     }
 
-    /// @notice Canonical accounting snapshot for UIs/auditors.
     function getAccounting()
         external
         view
@@ -362,20 +354,16 @@ contract SingleWinnerLottery is ReentrancyGuard {
         nativeBalance = address(this).balance;
     }
 
-    /// @notice Public verifier wrapper for the winner search logic.
     function findWinner(uint256 ticketIndex) external view returns (address) {
         uint256 sold = getSold();
         if (sold == 0 || ticketIndex >= sold) revert InvalidCount();
         return _findWinner(ticketIndex);
     }
 
-    /// @notice Expose the current minimum required to CREATE a new range (not counting "returning buyer" case).
     function currentNewRangeMin() external view returns (uint256 required) {
         required = _minTicketsForNewRange();
         if (minPurchaseAmount > required) required = minPurchaseAmount;
     }
-
-    // ----- Range throttling helpers -----
 
     function _minTicketsForNewRange() internal view returns (uint256) {
         uint256 r = ticketRanges.length;
@@ -386,7 +374,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return 20;
     }
 
-    /// @notice Minimum tickets the given user must buy *right now* (based on range throttling + minPurchaseAmount).
     function minTicketsToBuy(address user) external view returns (uint256 required) {
         required = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
 
@@ -406,7 +393,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (block.timestamp >= deadline) revert LotteryExpired();
         if (msg.sender == creator) revert CreatorCannotBuy();
 
-        // Keep creator-configured minimum for everyone
         if (minPurchaseAmount > 0 && count < minPurchaseAmount) revert BatchTooSmall();
 
         uint256 currentSold = getSold();
@@ -418,7 +404,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         bool returning = (ticketRanges.length > 0 && ticketRanges[ticketRanges.length - 1].buyer == msg.sender);
 
-        // Throttle only when this buy would create a NEW range
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
 
@@ -455,20 +440,17 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
-    // --- finalize wrappers now call into this internal function ---
-
     function finalize() external payable nonReentrant {
-        // preserve original behavior
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
         uint256 sold = getSold();
         bool isFull = (maxTickets > 0 && sold >= maxTickets);
-        bool isExpired = (block.timestamp >= deadline);
+        bool isExpiredNow = (block.timestamp >= deadline);
 
-        if (!isFull && !isExpired) revert NotReadyToFinalize();
+        if (!isFull && !isExpiredNow) revert NotReadyToFinalize();
 
-        if (isExpired && sold < minTickets) {
+        if (isExpiredNow && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
             if (msg.value > 0) _safeNativeTransfer(msg.sender, msg.value);
             return;
@@ -483,7 +465,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     function _finalizeInternal(uint256 fee, uint256 paid) internal {
-        // Preconditions duplicated lightly to keep wrappers consistent.
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
@@ -637,7 +618,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
-        // Ticket refunds are implicit on cancel: just call withdrawFunds()
         if (status == Status.Canceled) {
             uint256 tix = ticketsOwned[msg.sender];
             if (tix > 0) {
