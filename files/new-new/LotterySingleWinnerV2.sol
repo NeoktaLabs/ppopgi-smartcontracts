@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
@@ -277,7 +278,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
+        // Cancel path: MUST be called with 0 value, otherwise ETH would be stuck.
         if (isExpired && sold < minTickets) {
+            if (msg.value != 0) revert WrongEntropyFee();
             _cancelAndRefundCreator("Min tickets not reached");
             return;
         }
