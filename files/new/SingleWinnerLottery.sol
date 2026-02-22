@@ -66,11 +66,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error RequestPending();
     error NotReadyToFinalize();
     error NoParticipants();
-    error InsufficientFee();
     error InvalidRequest();
 
+    // Finalize UX errors (bot-friendly)
     error InvalidFeeAmount(uint256 required, uint256 provided);
-    error FeeExceedsMax(uint256 fee, uint256 maxFee);
 
     error UnauthorizedCallback();
     error NotDrawing();
@@ -79,8 +78,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error EmergencyHatchLocked();
 
     error NothingToClaim();
-    error NativeRefundFailed();
-    error ZeroAddress();
     error AccountingMismatch();
 
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
@@ -99,8 +96,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     event RefundAllocated(address indexed user, uint256 amount);
     event FundsClaimed(address indexed user, uint256 amount);
-    event NativeRefundAllocated(address indexed user, uint256 amount);
-    event NativeClaimed(address indexed to, uint256 amount);
 
     event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
     event FundingConfirmed(address indexed caller, uint256 expectedPot);
@@ -123,7 +118,13 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint256 public constant PUBLIC_HATCH_DELAY = 7 days;
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
-    enum Status { FundingPending, Open, Drawing, Completed, Canceled }
+    enum Status {
+        FundingPending,
+        Open,
+        Drawing,
+        Completed,
+        Canceled
+    }
     Status public status;
 
     string public name;
@@ -139,7 +140,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint32 public minPurchaseAmount;
 
     uint256 public totalReservedUSDC;
-    uint256 public totalClaimableNative;
 
     address public winner;
     address public selectedProvider;
@@ -154,7 +154,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     mapping(address => uint256) public ticketsOwned;
 
     mapping(address => uint256) public claimableFunds;
-    mapping(address => uint256) public claimableNative;
 
     bool public creatorPotRefunded;
 
@@ -219,7 +218,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // =========================
-    // UX / helper views (existing)
+    // UX / helper views
     // =========================
 
     function isOpen() external view returns (bool) {
@@ -294,17 +293,15 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return entropy.getFeeV2(callbackGasLimit);
     }
 
+    // =========================
+    // Finalization (bot-first)
+    // =========================
+
+    /// @notice Bot-friendly finalize: MUST pay exact Entropy fee (no refunds, no native reclaim).
     function finalizeExact() external payable nonReentrant {
         uint256 fee = getFinalizeFee();
         if (msg.value != fee) revert InvalidFeeAmount(fee, msg.value);
-        _finalizeInternal(fee, msg.value);
-    }
-
-    function finalizeWithMaxFee(uint256 maxFee) external payable nonReentrant {
-        uint256 fee = getFinalizeFee();
-        if (fee > maxFee) revert FeeExceedsMax(fee, maxFee);
-        if (msg.value < fee) revert InvalidFeeAmount(fee, msg.value);
-        _finalizeInternal(fee, msg.value);
+        _finalizeInternal(fee);
     }
 
     function getTicketRanges(uint256 start, uint256 limit)
@@ -313,7 +310,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -338,16 +335,12 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (
             uint256 reservedUSDC,
             uint256 usdcBalance,
-            uint256 excessUSDC,
-            uint256 claimableNativeTotal,
-            uint256 nativeBalance
+            uint256 excessUSDC
         )
     {
         reservedUSDC = totalReservedUSDC;
         usdcBalance = usdcToken.balanceOf(address(this));
         excessUSDC = usdcBalance > reservedUSDC ? (usdcBalance - reservedUSDC) : 0;
-        claimableNativeTotal = totalClaimableNative;
-        nativeBalance = address(this).balance;
     }
 
     function findWinner(uint256 ticketIndex) external view returns (address) {
@@ -362,10 +355,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // =========================
-    // Added UX/indexer helpers (NEW)
+    // Added UX/indexer helpers (kept)
     // =========================
 
-    /// @notice Rich buy quote for a specific user (UI-friendly, non-reverting).
     function quoteBuyFor(address user, uint256 count)
         external
         view
@@ -378,7 +370,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     {
         totalCost = ticketPrice * count;
 
-        // mirrors minTicketsToBuy logic
         minRequired = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
         uint256 len = ticketRanges.length;
         bool isLastBuyer = (len > 0 && ticketRanges[len - 1].buyer == user);
@@ -387,7 +378,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
             if (newMin > minRequired) minRequired = newMin;
         }
 
-        // mirrors maxBuyableNow logic
         if (status != Status.Open || block.timestamp >= deadline) {
             maxNow = 0;
         } else {
@@ -412,7 +402,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
             (count <= maxNow);
     }
 
-    /// @notice Quick ticket stats snapshot.
     function getTicketStats()
         external
         view
@@ -435,7 +424,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    /// @notice Outcome/cancel/draw snapshot for dashboards.
     function getOutcome()
         external
         view
@@ -460,26 +448,22 @@ contract SingleWinnerLottery is ReentrancyGuard {
         canceledAtTs = canceledAt;
     }
 
-    /// @notice Batch ticket ownership lookup (indexer/UI helper).
     function getTicketsOwnedBatch(address[] calldata users) external view returns (uint256[] memory out) {
         uint256 n = users.length;
         out = new uint256[](n);
         for (uint256 i = 0; i < n; i++) out[i] = ticketsOwned[users[i]];
     }
 
-    /// @notice Batch claimables lookup (indexer/UI helper).
+    // NOTE: native claimables removed, so this only returns USDC claimables.
     function getClaimablesBatch(address[] calldata users)
         external
         view
-        returns (uint256[] memory usdcAmounts, uint256[] memory nativeAmounts)
+        returns (uint256[] memory usdcAmounts)
     {
         uint256 n = users.length;
         usdcAmounts = new uint256[](n);
-        nativeAmounts = new uint256[](n);
         for (uint256 i = 0; i < n; i++) {
-            address u = users[i];
-            usdcAmounts[i] = claimableFunds[u];
-            nativeAmounts[i] = claimableNative[u];
+            usdcAmounts[i] = claimableFunds[users[i]];
         }
     }
 
@@ -509,7 +493,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // =========================
-    // Core functions (UNCHANGED)
+    // Core functions
     // =========================
 
     function buyTickets(uint256 count) external nonReentrant {
@@ -566,7 +550,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
-    function finalize() external payable nonReentrant {
+    function _finalizeInternal(uint256 fee) internal {
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
 
@@ -576,33 +560,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (!isFull && !isExpiredNow) revert NotReadyToFinalize();
 
+        // If expired and not enough tickets, cancel (NO native refunds; any msg.value is already exact-fee)
         if (isExpiredNow && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
-            if (msg.value > 0) _safeNativeTransfer(msg.sender, msg.value);
-            return;
-        }
-
-        if (sold == 0) revert NoParticipants();
-
-        uint256 fee = getFinalizeFee();
-        if (msg.value < fee) revert InsufficientFee();
-
-        _finalizeInternal(fee, msg.value);
-    }
-
-    function _finalizeInternal(uint256 fee, uint256 paid) internal {
-        if (status != Status.Open) revert LotteryNotOpen();
-        if (entropyRequestId != 0) revert RequestPending();
-
-        uint256 sold = getSold();
-        bool isFull = (maxTickets > 0 && sold >= maxTickets);
-        bool isExpiredNow = (block.timestamp >= deadline);
-
-        if (!isFull && !isExpiredNow) revert NotReadyToFinalize();
-
-        if (isExpiredNow && sold < minTickets) {
-            _cancelAndRefundCreator("Min tickets not reached");
-            if (paid > 0) _safeNativeTransfer(msg.sender, paid);
             return;
         }
 
@@ -620,8 +580,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (requestId == 0) revert InvalidRequest();
 
         entropyRequestId = requestId;
-
-        if (paid > fee) _safeNativeTransfer(msg.sender, paid - fee);
 
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
@@ -741,6 +699,11 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
+    // =========================
+    // USDC withdrawals only
+    // =========================
+
+    /// @notice The only reclaim path: USDC withdrawals (winnings / creator share / protocol share / refunds).
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
@@ -769,38 +732,11 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit FundsClaimed(msg.sender, amount);
     }
 
-    function _safeNativeTransfer(address to, uint256 amount) internal {
-        (bool success,) = payable(to).call{value: amount}("");
-        if (!success) {
-            claimableNative[to] += amount;
-            totalClaimableNative += amount;
-            emit NativeRefundAllocated(to, amount);
-        }
-    }
-
-    function withdrawNative() external nonReentrant {
-        withdrawNativeTo(msg.sender);
-    }
-
-    function withdrawNativeTo(address to) public nonReentrant {
-        if (to == address(0)) revert ZeroAddress();
-        uint256 amount = claimableNative[msg.sender];
-        if (amount == 0) revert NothingToClaim();
-        if (totalClaimableNative < amount) revert AccountingMismatch();
-
-        claimableNative[msg.sender] = 0;
-        totalClaimableNative -= amount;
-
-        (bool ok,) = payable(to).call{value: amount}("");
-        if (!ok) revert NativeRefundFailed();
-
-        emit NativeClaimed(to, amount);
-    }
-
     function getSold() public view returns (uint256) {
         uint256 len = ticketRanges.length;
         return len == 0 ? 0 : uint256(ticketRanges[len - 1].upperBound);
     }
 
+    // Keep receive() so Entropy fee payments can be sent in.
     receive() external payable {}
 }
