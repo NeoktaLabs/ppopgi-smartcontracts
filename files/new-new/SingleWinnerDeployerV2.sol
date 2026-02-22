@@ -11,6 +11,9 @@ import "./SingleWinnerRaffle.sol";
  * @title SingleWinnerDeployer
  * @notice Factory for deploying SingleWinnerRaffle instances and registering them in RafflesRegistry.
  *         Config changes here affect ONLY future raffles.
+ *
+ * @dev Updated for "no owner raffles":
+ *      - Removed safeOwner and any transferOwnership() call on the raffle.
  */
 contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -60,7 +63,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     }
 
     RafflesRegistry public immutable registry;
-    address public immutable safeOwner;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
     // Mutable config for FUTURE raffles only
@@ -74,7 +76,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     constructor(
         address _owner,
         address _registry,
-        address _safeOwner,
         address _usdc,
         address _entropy,
         address _entropyProvider,
@@ -85,7 +86,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         if (
             _owner == address(0) ||
             _registry == address(0) ||
-            _safeOwner == address(0) ||
             _usdc == address(0) ||
             _entropy == address(0) ||
             _entropyProvider == address(0) ||
@@ -97,7 +97,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
         owner = _owner;
         registry = RafflesRegistry(_registry);
-        safeOwner = _safeOwner;
 
         usdc = _usdc;
         entropy = _entropy;
@@ -175,9 +174,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
         // Open the raffle; only deployer can confirm.
         lot.confirmFunding();
-
-        // Hand ownership to your Safe (operational admin / emergency hatch privileged path).
-        lot.transferOwnership(safeOwner);
 
         lotteryAddr = address(lot);
         uint64 raffleDeadline = lot.deadline();
