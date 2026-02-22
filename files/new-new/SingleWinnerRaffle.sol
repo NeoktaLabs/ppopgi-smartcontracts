@@ -16,7 +16,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         address entropyProvider;
         uint32 callbackGasLimit;
         address feeRecipient;
-        uint256 protocolFeePercent;
+        uint256 protocolFeePercent; // 0..20
         address creator;
         string name;
         uint256 ticketPrice;
@@ -114,10 +114,13 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
     uint256 public constant MAX_BATCH_BUY = 1000;
 
+    // Updated as requested
     uint256 public constant MAX_RANGES = 100_000;
 
+    // Base min cost to create a NEW range (USDC 6 decimals)
     uint256 public constant MIN_NEW_RANGE_COST_BASE = 1_000_000; // 1 USDC
 
+    // Ramp: +1 USDC every 10,000 ranges
     uint256 public constant RANGE_STEP = 10_000;
     uint256 public constant RANGE_COST_STEP = 1_000_000; // 1 USDC
 
@@ -197,6 +200,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
+        // At deployment, tier is 0 => base min range cost.
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST_BASE, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -226,24 +230,33 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
+    // -------------------------
+    // Range policy + UX getters
+    // -------------------------
+
+    /// @notice Minimum totalCost required to CREATE a new range at a given rangeCount (before adding the new one).
     function minNewRangeCostAt(uint256 rangeCount) public pure returns (uint256) {
         uint256 tier = rangeCount / RANGE_STEP; // 0..9 when MAX_RANGES=100k
         return MIN_NEW_RANGE_COST_BASE + (tier * RANGE_COST_STEP);
     }
 
+    /// @notice Minimum totalCost required to create a new range RIGHT NOW.
     function minNewRangeCostNow() public view returns (uint256) {
         return minNewRangeCostAt(ticketRanges.length);
     }
 
+    /// @notice Minimum ticket count required (at current ticketPrice) to be allowed to create a new range RIGHT NOW.
     function minTicketsToOpenNewRangeNow() external view returns (uint256) {
         return Math.ceilDiv(minNewRangeCostNow(), ticketPrice);
     }
 
+    /// @notice Whether a buyer would create a new range (i.e., buyer != last buyer).
     function wouldCreateNewRange(address buyer) public view returns (bool) {
         uint256 len = ticketRanges.length;
         return (len == 0 || ticketRanges[len - 1].buyer != buyer);
     }
 
+    /// @notice High-level range policy constants in one call.
     function getRangePolicy()
         external
         pure
@@ -257,6 +270,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         return (MAX_RANGES, RANGE_STEP, MIN_NEW_RANGE_COST_BASE, RANGE_COST_STEP);
     }
 
+    /// @notice Current tier info to show users why min changes over time.
     function getRangeTierInfo()
         external
         view
@@ -276,10 +290,12 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         rangesUntilNextTier = (rangeCount >= nextTierAtRangeCount) ? 0 : (nextTierAtRangeCount - rangeCount);
     }
 
+    /// @notice Range count.
     function getTicketRangesCount() external view returns (uint256) {
         return ticketRanges.length;
     }
 
+    /// @notice Get a single range with explicit lowerBound/size (better UX than only upperBound).
     function getRangeAt(uint256 index)
         external
         view
@@ -295,6 +311,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         size = upperBound - lowerBound;
     }
 
+    /// @notice Paginated ranges including lowerBounds for UI rendering.
     function getRangesWithBounds(uint256 start, uint256 limit)
         external
         view
@@ -320,6 +337,7 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         }
     }
 
+    /// @notice Find which range owns a ticket index (0..sold-1). Useful for explorers/debug/UI.
     function findRangeForTicket(uint256 ticketIndex) external view returns (uint256 rangeIndex, address buyer) {
         uint256 sold = getSold();
         if (ticketIndex >= sold) revert AccountingMismatch();
@@ -338,219 +356,9 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         return low;
     }
 
-    function getState()
-        external
-        view
-        returns (
-            Status _status,
-            uint64 _createdAt,
-            uint64 _deadline,
-            uint256 _sold,
-            uint256 _ticketRevenue,
-            uint64 _entropyRequestId,
-            uint64 _drawingRequestedAt,
-            address _winner
-        )
-    {
-        _status = status;
-        _createdAt = createdAt;
-        _deadline = deadline;
-        _sold = getSold();
-        _ticketRevenue = ticketRevenue;
-        _entropyRequestId = entropyRequestId;
-        _drawingRequestedAt = drawingRequestedAt;
-        _winner = winner;
-    }
-
-    function getSummary()
-        external
-        view
-        returns (
-            Status _status,
-            string memory _name,
-            address _creator,
-            address _usdc,
-            uint64 _createdAt,
-            uint64 _deadline,
-            uint256 _ticketPrice,
-            uint256 _winningPot,
-            uint64 _minTickets,
-            uint64 _maxTickets,
-            uint32 _minPurchaseAmount,
-            uint256 _sold,
-            uint256 _ticketRevenue,
-            address _winner,
-            uint64 _entropyRequestId,
-            uint64 _drawingRequestedAt,
-            address _feeRecipient,
-            uint256 _protocolFeePercent,
-            address _finalizer,
-            address _guardian
-        )
-    {
-        _status = status;
-        _name = name;
-        _creator = creator;
-        _usdc = address(usdcToken);
-        _createdAt = createdAt;
-        _deadline = deadline;
-        _ticketPrice = ticketPrice;
-        _winningPot = winningPot;
-        _minTickets = minTickets;
-        _maxTickets = maxTickets;
-        _minPurchaseAmount = minPurchaseAmount;
-        _sold = getSold();
-        _ticketRevenue = ticketRevenue;
-        _winner = winner;
-        _entropyRequestId = entropyRequestId;
-        _drawingRequestedAt = drawingRequestedAt;
-        _feeRecipient = feeRecipient;
-        _protocolFeePercent = protocolFeePercent;
-        _finalizer = finalizer;
-        _guardian = guardian;
-    }
-
-    function getUserStats(address user)
-        external
-        view
-        returns (
-            uint256 ownedTickets,
-            uint256 claimable,
-            bool isWinner,
-            bool canRefundTickets,
-            bool canWithdraw
-        )
-    {
-        ownedTickets = ticketsOwned[user];
-        claimable = claimableFunds[user];
-        isWinner = (winner != address(0) && user == winner);
-        canRefundTickets = (status == Status.Canceled && ownedTickets > 0);
-        canWithdraw = (claimable > 0);
-    }
-
-    function getActions(address user)
-        external
-        view
-        returns (
-            bool canBuy,
-            bool canFinalize,
-            bool canHatch,
-            bool canRefundTickets,
-            bool canWithdraw
-        )
-    {
-        canBuy = (status == Status.Open && block.timestamp < deadline && user != creator);
-        canFinalize = isFinalizable();
-        canHatch = isHatchOpen();
-        canRefundTickets = (status == Status.Canceled && ticketsOwned[user] > 0);
-        canWithdraw = (claimableFunds[user] > 0);
-    }
-
-    function getOdds(address user)
-        external
-        view
-        returns (uint256 sold, uint256 userTickets, uint256 oddsBps)
-    {
-        sold = getSold();
-        userTickets = ticketsOwned[user];
-        if (sold == 0 || userTickets == 0) return (sold, userTickets, 0);
-
-        if (userTickets > sold) userTickets = sold;
-
-        oddsBps = Math.mulDiv(userTickets, 10_000, sold);
-        if (oddsBps > 10_000) oddsBps = 10_000;
-    }
-
-    function getProgress()
-        external
-        view
-        returns (
-            uint256 sold,
-            uint64 _minTickets,
-            uint64 _maxTickets,
-            uint256 remainingToMin,
-            uint256 remainingToMax,
-            uint256 secondsLeft,
-            bool isExpired
-        )
-    {
-        sold = getSold();
-        _minTickets = minTickets;
-        _maxTickets = maxTickets;
-
-        remainingToMin = (sold >= _minTickets) ? 0 : (uint256(_minTickets) - sold);
-
-        if (_maxTickets == 0) {
-            remainingToMax = 0;
-        } else {
-            remainingToMax = (sold >= _maxTickets) ? 0 : (uint256(_maxTickets) - sold);
-        }
-
-        if (block.timestamp >= deadline) {
-            secondsLeft = 0;
-            isExpired = true;
-        } else {
-            secondsLeft = uint256(deadline) - block.timestamp;
-            isExpired = false;
-        }
-    }
-
-    function getAccounting()
-        external
-        view
-        returns (uint256 contractBalance, uint256 reservedUSDC, uint256 unreservedUSDC, uint256 _winningPot, uint256 _ticketRevenue)
-    {
-        contractBalance = usdcToken.balanceOf(address(this));
-        reservedUSDC = totalReservedUSDC;
-        unreservedUSDC = (contractBalance > reservedUSDC) ? (contractBalance - reservedUSDC) : 0;
-        _winningPot = winningPot;
-        _ticketRevenue = ticketRevenue;
-    }
-
-    function quoteBuy(address buyer, uint256 count)
-        external
-        view
-        returns (
-            uint256 totalCost,
-            bool createsNewRange,
-            uint256 currentMinNewRangeCost,
-            bool meetsNewRangeMinCost,
-            uint256 minTicketsToOpenNewRange,
-            uint256 postSold,
-            uint256 postRangeCount
-        )
-    {
-        totalCost = ticketPrice * count;
-        createsNewRange = wouldCreateNewRange(buyer);
-
-        currentMinNewRangeCost = minNewRangeCostNow();
-        meetsNewRangeMinCost = (!createsNewRange) || (totalCost >= currentMinNewRangeCost);
-
-        minTicketsToOpenNewRange = Math.ceilDiv(currentMinNewRangeCost, ticketPrice);
-
-        uint256 sold = getSold();
-        postSold = sold + count;
-
-        uint256 ranges = ticketRanges.length;
-        postRangeCount = createsNewRange ? (ranges + 1) : ranges;
-    }
-
-    function getLatestRange()
-        external
-        view
-        returns (bool exists, address buyer, uint96 lowerBound, uint96 upperBound, uint96 size, uint256 rangeIndex)
-    {
-        uint256 len = ticketRanges.length;
-        if (len == 0) return (false, address(0), 0, 0, 0, 0);
-
-        rangeIndex = len - 1;
-        TicketRange storage tr = ticketRanges[rangeIndex];
-        exists = true;
-        buyer = tr.buyer;
-        upperBound = tr.upperBound;
-        lowerBound = (rangeIndex == 0) ? 0 : ticketRanges[rangeIndex - 1].upperBound;
-        size = upperBound - lowerBound;
-    }
+    // -------------------------
+    // Other UX helpers
+    // -------------------------
 
     function isFinalizable() public view returns (bool) {
         if (status != Status.Open) return false;
@@ -601,6 +409,8 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
+
+            // Dynamic min cost: +1 USDC every 10k ranges.
             uint256 minCost = minNewRangeCostAt(ticketRanges.length);
             if (totalCost < minCost) revert BatchTooCheap();
         }
