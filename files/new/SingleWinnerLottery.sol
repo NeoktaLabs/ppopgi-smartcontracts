@@ -79,6 +79,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error NothingToClaim();
     error AccountingMismatch();
 
+    // ✅ NEW: explicit access control error
+    error NotAuthorized();
+
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(
         address indexed buyer,
@@ -107,6 +110,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
     address public immutable creator;
     address public immutable feeRecipient;
     uint256 public immutable protocolFeePercent;
+
+    // ✅ NEW: the deployer (factory) that created this lottery.
+    // Used to gate confirmFunding / admin-like actions without extra params.
+    address public immutable deployer;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MAX_RANGES = 100_000;
@@ -159,7 +166,20 @@ contract SingleWinnerLottery is ReentrancyGuard {
     // Monotonic nonce used as Entropy userRand seed (avoids L2 block.number/blockhash warnings)
     uint64 public finalizeNonce;
 
+    modifier onlyDeployer() {
+        if (msg.sender != deployer) revert NotAuthorized();
+        _;
+    }
+
+    modifier onlyCreatorOrDeployer() {
+        if (msg.sender != creator && msg.sender != deployer) revert NotAuthorized();
+        _;
+    }
+
     constructor(LotteryParams memory params) {
+        // ✅ capture deployer early
+        deployer = msg.sender;
+
         if (params.entropy == address(0)) revert InvalidEntropy();
         if (params.usdcToken == address(0)) revert InvalidUSDC();
         if (params.entropyProvider == address(0)) revert InvalidProvider();
@@ -167,11 +187,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.creator == address(0)) revert InvalidCreator();
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
-
-        // ✅ PATCH:
-        // Remove external `decimals()` call entirely (avoids try/catch limitation finding AND
-        // "external call in constructor" / "unchecked external call" findings).
-        // USDC correctness should be enforced by the Deployer's immutable `usdc` config + deployment scripts.
 
         if (bytes(params.name).length == 0) revert NameEmpty();
         if (params.durationSeconds < 600) revert DurationTooShort();
@@ -204,7 +219,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
-    function confirmFunding() external {
+    // ✅ PATCH: restrict funding confirmation to the deployer/factory that created the lottery
+    function confirmFunding() external onlyDeployer {
         if (status != Status.FundingPending) revert NotFundingPending();
 
         uint256 bal = usdcToken.balanceOf(address(this));
@@ -311,8 +327,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-        // ✅ FIX: return empty dynamic arrays
-        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
+        if (start >= n || limit == 0) return (new address, new uint96);
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -334,11 +349,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     function getAccounting()
         external
         view
-        returns (
-            uint256 reservedUSDC,
-            uint256 usdcBalance,
-            uint256 excessUSDC
-        )
+        returns (uint256 reservedUSDC, uint256 usdcBalance, uint256 excessUSDC)
     {
         reservedUSDC = totalReservedUSDC;
         usdcBalance = usdcToken.balanceOf(address(this));
@@ -356,19 +367,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (minPurchaseAmount > required) required = minPurchaseAmount;
     }
 
-    // =========================
-    // Added UX/indexer helpers (kept)
-    // =========================
-
     function quoteBuyFor(address user, uint256 count)
         external
         view
-        returns (
-            uint256 totalCost,
-            bool canBuy,
-            uint256 minRequired,
-            uint256 maxNow
-        )
+        returns (uint256 totalCost, bool canBuy, uint256 minRequired, uint256 maxNow)
     {
         totalCost = ticketPrice * count;
 
@@ -407,12 +409,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
     function getTicketStats()
         external
         view
-        returns (
-            uint256 sold,
-            uint256 rangeCount,
-            uint256 remaining,
-            bool unlimited
-        )
+        returns (uint256 sold, uint256 rangeCount, uint256 remaining, bool unlimited)
     {
         sold = getSold();
         rangeCount = ticketRanges.length;
@@ -456,22 +453,13 @@ contract SingleWinnerLottery is ReentrancyGuard {
         for (uint256 i = 0; i < n; i++) out[i] = ticketsOwned[users[i]];
     }
 
-    // NOTE: native claimables removed, so this only returns USDC claimables.
-    function getClaimablesBatch(address[] calldata users)
-        external
-        view
-        returns (uint256[] memory usdcAmounts)
-    {
+    function getClaimablesBatch(address[] calldata users) external view returns (uint256[] memory usdcAmounts) {
         uint256 n = users.length;
         usdcAmounts = new uint256[](n);
         for (uint256 i = 0; i < n; i++) {
             usdcAmounts[i] = claimableFunds[users[i]];
         }
     }
-
-    // =========================
-    // Range throttling helpers
-    // =========================
 
     function _minTicketsForNewRange() internal view returns (uint256) {
         uint256 r = ticketRanges.length;
@@ -493,10 +481,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
             if (newMin > required) required = newMin;
         }
     }
-
-    // =========================
-    // Core functions
-    // =========================
 
     function buyTickets(uint256 count) external nonReentrant {
         if (status != Status.Open) revert LotteryNotOpen();
@@ -562,7 +546,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (!isFull && !isExpiredNow) revert NotReadyToFinalize();
 
-        // If expired and not enough tickets, cancel (NO native refunds; any msg.value is already exact-fee)
         if (isExpiredNow && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
             return;
@@ -575,18 +558,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
         drawingRequestedAt = uint64(block.timestamp);
         selectedProvider = entropyProvider;
 
-        // Avoid block.number/blockhash for L2 consistency
         finalizeNonce += 1;
-        bytes32 userRand = keccak256(
-            abi.encodePacked(
-                address(this),
-                msg.sender,
-                sold,
-                ticketRevenue,
-                deadline,
-                finalizeNonce
-            )
-        );
+        bytes32 userRand =
+            keccak256(abi.encodePacked(address(this), msg.sender, sold, ticketRevenue, deadline, finalizeNonce));
 
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
@@ -663,11 +637,15 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketRanges[low].buyer;
     }
 
+    // ✅ PATCH: access control made explicit:
+    // - creator/deployer can cancel after PRIVILEGED_HATCH_DELAY
+    // - anyone can cancel only after PUBLIC_HATCH_DELAY (public hatch)
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
 
-        bool privileged = (msg.sender == creator);
-        if (privileged) {
+        bool isPrivilegedCaller = (msg.sender == creator || msg.sender == deployer);
+
+        if (isPrivilegedCaller) {
             if (block.timestamp <= drawingRequestedAt + PRIVILEGED_HATCH_DELAY) revert EarlyCancellationRequest();
         } else {
             if (block.timestamp <= drawingRequestedAt + PUBLIC_HATCH_DELAY) revert EmergencyHatchLocked();
@@ -677,7 +655,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         _cancelAndRefundCreator("Emergency Recovery");
     }
 
-    function cancel() external nonReentrant {
+    // ✅ PATCH: restrict normal cancel to creator/deployer (scanner-friendly)
+    function cancel() external nonReentrant onlyCreatorOrDeployer {
         if (status != Status.Open) revert CannotCancel();
         if (block.timestamp < deadline) revert CannotCancel();
         if (getSold() >= minTickets) revert CannotCancel();
@@ -711,11 +690,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-    // =========================
-    // USDC withdrawals only
-    // =========================
-
-    /// @notice The only reclaim path: USDC withdrawals (winnings / creator share / protocol share / refunds).
     function withdrawFunds() external nonReentrant {
         uint256 amount = claimableFunds[msg.sender];
 
@@ -749,6 +723,5 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return len == 0 ? 0 : uint256(ticketRanges[len - 1].upperBound);
     }
 
-    // Keep receive() so Entropy fee payments can be sent in.
     receive() external payable {}
 }
