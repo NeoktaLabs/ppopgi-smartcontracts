@@ -10,6 +10,10 @@ contract LotteryRegistry is Ownable2Step {
     error InvalidTypeId();
     error NotContract();
 
+    // New: creator integrity errors
+    error CreatorQueryFailed();
+    error InvalidCreator();
+
     event RegistrarSet(address indexed registrar, bool authorized);
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
@@ -36,11 +40,14 @@ contract LotteryRegistry is Ownable2Step {
         emit RegistrarSet(registrar, authorized);
     }
 
-    function registerLottery(uint256 typeId, address lottery, address creator) external onlyRegistrar {
-        if (lottery == address(0) || creator == address(0)) revert ZeroAddress();
+    /// @notice Registrar registers a lottery. Creator is READ from the lottery contract (creator()).
+    function registerLottery(uint256 typeId, address lottery) external onlyRegistrar {
+        if (lottery == address(0)) revert ZeroAddress();
         if (typeId == 0) revert InvalidTypeId();
         if (typeIdOf[lottery] != 0) revert AlreadyRegistered();
         if (lottery.code.length == 0) revert NotContract();
+
+        address creator = _readCreator(lottery);
 
         allLotteries.push(lottery);
         typeIdOf[lottery] = typeId;
@@ -50,6 +57,16 @@ contract LotteryRegistry is Ownable2Step {
         lotteriesByType[typeId].push(lottery);
 
         emit LotteryRegistered(allLotteries.length - 1, typeId, lottery, creator);
+    }
+
+    /// @dev Reads `creator()` from a lottery with bounded-gas staticcall to avoid griefing.
+    function _readCreator(address lottery) internal view returns (address creator) {
+        // bytes4(keccak256("creator()")) == 0x02fb0c5e
+        (bool ok, bytes memory ret) = lottery.staticcall{gas: 25_000}(hex"02fb0c5e");
+        if (!ok || ret.length < 32) revert CreatorQueryFailed();
+
+        creator = abi.decode(ret, (address));
+        if (creator == address(0)) revert InvalidCreator();
     }
 
     function isRegisteredLottery(address lottery) external view returns (bool) {
@@ -82,7 +99,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -93,10 +110,14 @@ contract LotteryRegistry is Ownable2Step {
         }
     }
 
-    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
+    function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit)
+        external
+        view
+        returns (address[] memory page)
+    {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
