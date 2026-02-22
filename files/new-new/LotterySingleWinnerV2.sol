@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
 /**
  * @title SingleWinnerRaffle
- * @notice USDC-only single-winner raffle. No native accounting/withdrawals.
+ * @notice USDC-only single-winner raffle. No owner/admin functions.
  *         Native (ETH) is only used to pay the Entropy fee at finalize().
+ *
+ * @dev Assumption: USDC always has 6 decimals (canonical USDC). We intentionally do NOT query decimals().
  */
-contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
+contract SingleWinnerRaffle is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct LotteryParams {
@@ -75,15 +75,11 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     error CannotCancel();
     error NotCanceled();
     error EarlyCancellationRequest();
-    error EmergencyHatchLocked();
 
     error NothingToClaim();
     error NothingToRefund();
     error AccountingMismatch();
     error UnexpectedTransferAmount();
-
-    // Ownership-renounce hard-disable (scanner-friendly + avoids accidental lockout)
-    error RenounceDisabled();
 
     // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
@@ -106,7 +102,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
     event FundingConfirmed(address indexed funder, uint256 amount);
 
-    // One-step ticket refund event
     event TicketRefundClaimed(address indexed user, uint256 amount);
 
     // State (USDC-only)
@@ -126,20 +121,13 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
-    uint256 public constant PRIVILEGED_HATCH_DELAY = 1 days;
-    uint256 public constant PUBLIC_HATCH_DELAY = 7 days;
+    uint256 public constant PUBLIC_HATCH_DELAY = 2 hours;
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
     uint256 public totalReservedUSDC;
     uint256 public activeDrawings;
 
-    enum Status {
-        FundingPending,
-        Open,
-        Drawing,
-        Completed,
-        Canceled
-    }
+    enum Status { FundingPending, Open, Drawing, Completed, Canceled }
     Status public status;
 
     string public name;
@@ -155,7 +143,7 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     uint32 public minPurchaseAmount;
 
     address public winner;
-    address public selectedProvider; // for verification during callback
+    address public selectedProvider;
     uint64 public drawingRequestedAt;
     uint64 public entropyRequestId;
     uint256 public soldAtDrawing;
@@ -163,10 +151,7 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     uint256 public soldAtCancel;
     uint64 public canceledAt;
 
-    struct TicketRange {
-        address buyer;
-        uint96 upperBound;
-    }
+    struct TicketRange { address buyer; uint96 upperBound; }
     TicketRange[] public ticketRanges;
 
     mapping(address => uint256) public ticketsOwned;
@@ -174,7 +159,7 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
 
     bool public creatorPotRefunded;
 
-    constructor(LotteryParams memory params) Ownable(msg.sender) {
+    constructor(LotteryParams memory params) {
         deployer = msg.sender;
 
         if (params.entropy == address(0)) revert InvalidEntropy();
@@ -184,12 +169,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         if (params.creator == address(0)) revert InvalidCreator();
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
-
-        try IERC20Metadata(params.usdcToken).decimals() returns (uint8 d) {
-            if (d != 6) revert InvalidUSDC();
-        } catch {
-            revert InvalidUSDC();
-        }
 
         if (bytes(params.name).length == 0) revert NameEmpty();
         if (params.durationSeconds < 600) revert DurationTooShort();
@@ -225,11 +204,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         minPurchaseAmount = params.minPurchaseAmount;
 
         status = Status.FundingPending;
-    }
-
-    /// @dev Disable renounceOwnership (scanner-friendly + avoids accidental lockout).
-    function renounceOwnership() public view override onlyOwner {
-        revert RenounceDisabled();
     }
 
     function confirmFunding() external {
@@ -303,7 +277,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
-        // Expired but minTickets not reached => cancel and allow USDC refunds (no native refunds).
         if (isExpired && sold < minTickets) {
             _cancelAndRefundCreator("Min tickets not reached");
             return;
@@ -321,9 +294,7 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value != fee) revert WrongEntropyFee();
 
-        // Salt only: winner randomness comes from Entropy callback randomNumber.
         bytes32 requestSalt = keccak256(abi.encodePacked(address(this), msg.sender, sold, block.number));
-
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, requestSalt, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
@@ -332,9 +303,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
-    /**
-     * Entropy calls this function name/signature on your consumer.
-     */
     function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
         if (msg.sender != address(entropy)) revert UnauthorizedCallback();
 
@@ -348,6 +316,22 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         }
 
         _resolve(randomNumber);
+    }
+
+    function forceCancelStuck() external nonReentrant {
+        if (status != Status.Drawing) revert NotDrawing();
+        if (block.timestamp <= drawingRequestedAt + PUBLIC_HATCH_DELAY) revert EarlyCancellationRequest();
+
+        emit EmergencyRecovery();
+        _cancelAndRefundCreator("Emergency Recovery");
+    }
+
+    function cancel() external nonReentrant {
+        if (status != Status.Open) revert CannotCancel();
+        if (block.timestamp < deadline) revert CannotCancel();
+        if (getSold() >= minTickets) revert CannotCancel();
+
+        _cancelAndRefundCreator("Min tickets not reached");
     }
 
     function _resolve(bytes32 rand) internal {
@@ -398,35 +382,12 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
     function _findWinner(uint256 winningTicket) internal view returns (address) {
         uint256 low = 0;
         uint256 high = ticketRanges.length - 1;
-
         while (low < high) {
             uint256 mid = low + (high - low) / 2;
             if (ticketRanges[mid].upperBound > winningTicket) high = mid;
             else low = mid + 1;
         }
         return ticketRanges[low].buyer;
-    }
-
-    function forceCancelStuck() external nonReentrant {
-        if (status != Status.Drawing) revert NotDrawing();
-
-        bool privileged = (msg.sender == owner() || msg.sender == creator);
-        if (privileged) {
-            if (block.timestamp <= drawingRequestedAt + PRIVILEGED_HATCH_DELAY) revert EarlyCancellationRequest();
-        } else {
-            if (block.timestamp <= drawingRequestedAt + PUBLIC_HATCH_DELAY) revert EmergencyHatchLocked();
-        }
-
-        emit EmergencyRecovery();
-        _cancelAndRefundCreator("Emergency Recovery");
-    }
-
-    function cancel() external nonReentrant {
-        if (status != Status.Open) revert CannotCancel();
-        if (block.timestamp < deadline) revert CannotCancel();
-        if (getSold() >= minTickets) revert CannotCancel();
-
-        _cancelAndRefundCreator("Min tickets not reached");
     }
 
     function _cancelAndRefundCreator(string memory reason) internal {
@@ -463,7 +424,6 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-    /// @notice ONE-STEP ticket refund: pays USDC immediately on cancellation.
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
 
@@ -472,13 +432,11 @@ contract SingleWinnerRaffle is Ownable, ReentrancyGuard {
 
         uint256 refund = tix * ticketPrice;
 
-        // effects
         ticketsOwned[msg.sender] = 0;
 
         if (totalReservedUSDC < refund) revert AccountingMismatch();
         totalReservedUSDC -= refund;
 
-        // interaction
         usdcToken.safeTransfer(msg.sender, refund);
 
         emit PrizeAllocated(msg.sender, refund, 3);
