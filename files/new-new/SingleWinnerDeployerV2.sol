@@ -4,10 +4,10 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./LotteryRegistry.sol";
-import "./LotterySingleWinnerV2.sol";
+import "./RafflesRegistry.sol";
+import "./SingleWinnerRaffle.sol";
 
-contract SingleWinnerDeployerV2 is ReentrancyGuard {
+contract SingleWinnerDeployer is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error NotOwner();
@@ -46,15 +46,13 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         uint256 protocolFeePercent
     );
 
-    uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
-
     address public owner;
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
         _;
     }
 
-    LotteryRegistry public immutable registry;
+    RafflesRegistry public immutable registry;
     address public immutable safeOwner;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
@@ -72,7 +70,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         address _usdc,
         address _entropy,
         address _entropyProvider,
-        uint32 _callbackGasLimit,      // ✅ now used
+        uint32 _callbackGasLimit,
         address _feeRecipient,
         uint256 _protocolFeePercent
     ) {
@@ -85,7 +83,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
         if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
         owner = _owner;
-        registry = LotteryRegistry(_registry);
+        registry = RafflesRegistry(_registry);
         safeOwner = _safeOwner;
 
         usdc = _usdc;
@@ -138,7 +136,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
     ) external nonReentrant returns (address lotteryAddr) {
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
-        LotterySingleWinnerV2.LotteryParams memory params = LotterySingleWinnerV2.LotteryParams({
+        SingleWinnerRaffle.LotteryParams memory params = SingleWinnerRaffle.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
             entropyProvider: entropyProvider,
@@ -155,7 +153,7 @@ contract SingleWinnerDeployerV2 is ReentrancyGuard {
             minPurchaseAmount: minPurchaseAmount
         });
 
-        LotterySingleWinnerV2 lot = new LotterySingleWinnerV2(params);
+        SingleWinnerRaffle lot = new SingleWinnerRaffle(params);
 
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
         lot.confirmFunding();
