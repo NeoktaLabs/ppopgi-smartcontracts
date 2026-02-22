@@ -16,7 +16,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
     error FeeTooHigh();
     error NotAuthorizedRegistrar();
     error InvalidCallbackGasLimit();
-    error RegistryRegistrationFailed(bytes lowLevelData);
     error UnknownLottery();
 
     event LotteryDeployed(
@@ -141,7 +140,6 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
         }
     }
 
-
     function getCurrentConfig()
         external
         view
@@ -265,10 +263,8 @@ contract SingleWinnerDeployer is Ownable2Step, ReentrancyGuard {
 
         uint64 dl = lot.deadline();
 
-        try registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr) {
-        } catch (bytes memory data) {
-            revert RegistryRegistrationFailed(data);
-        }
+        // ✅ Remove try/catch: scanners often flag it, and revert behavior is the same.
+        registry.registerLottery(SINGLE_WINNER_TYPE_ID, lotteryAddr);
 
         emit LotteryDeployed(
             lotteryAddr,
