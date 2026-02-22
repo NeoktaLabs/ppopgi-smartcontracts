@@ -23,7 +23,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
 
-    // Kept as-is for backward compatibility
     event LotteryDeployed(
         address indexed lottery,
         address indexed creator,
@@ -41,7 +40,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets
     );
 
-    // Kept as-is for backward compatibility
     event ConfigUpdated(
         address usdc,
         address entropy,
@@ -51,7 +49,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint256 protocolFeePercent
     );
 
-    // New: emits trusted roles (doesn't break old indexers)
     event TrustedRolesUpdated(address finalizer, address guardian);
     event RaffleRoles(address indexed raffle, address indexed finalizer, address indexed guardian);
 
@@ -65,20 +62,17 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     RafflesRegistry public immutable registry;
     uint256 public constant SINGLE_WINNER_TYPE_ID = 1;
 
-    // Mutable config for FUTURE raffles only
     address public usdc;
     address public entropy;
     address public entropyProvider;
     uint32 public callbackGasLimit;
     address public feeRecipient;
     uint256 public protocolFeePercent;
-
-    // New: trusted-only roles for FUTURE raffles only
-    address public finalizer; // keeper/bot
-    address public guardian;  // e.g., Safe / ops multisig
+    address public finalizer;
+    address public guardian;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
-    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
+    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;

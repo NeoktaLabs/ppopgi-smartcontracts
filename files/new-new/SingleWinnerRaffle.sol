@@ -7,16 +7,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-/**
- * @title SingleWinnerRaffle
- * @notice USDC-only single-winner raffle.
- *         TRUSTED-ONLY lifecycle transitions:
- *           - finalize(): only finalizer
- *           - forceCancelStuck(): only finalizer or guardian
- *           - confirmFunding(): only factory (deployer)
- *
- * @dev Assumption: USDC always has 6 decimals (canonical USDC). We intentionally do NOT query decimals().
- */
 contract SingleWinnerRaffle is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -35,13 +25,10 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         uint64 maxTickets;
         uint64 durationSeconds;
         uint32 minPurchaseAmount;
-
-        // New: trusted-only roles (immutable per raffle)
-        address finalizer; // keeper/bot
-        address guardian;  // Safe / ops multisig
+        address finalizer;
+        address guardian;
     }
 
-    // Errors
     error ZeroAddress();
     error InvalidEntropy();
     error InvalidProvider();
@@ -92,7 +79,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     error AccountingMismatch();
     error UnexpectedTransferAmount();
 
-    // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(address indexed buyer, uint256 count, uint256 totalCost, uint256 totalSold, uint256 rangeIndex, bool isNewRange);
     event LotteryFinalized(uint64 requestId, uint256 totalSold, address provider);
@@ -106,7 +92,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     event FundingConfirmed(address indexed funder, uint256 amount);
     event TicketRefundClaimed(address indexed user, uint256 amount);
 
-    // State
     IERC20 public immutable usdcToken;
     address public immutable creator;
     address public immutable feeRecipient;
@@ -116,18 +101,17 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     address public immutable entropyProvider;
     uint32 public immutable callbackGasLimit;
 
-    // Trusted-only roles
-    address public immutable factory;   // the deployer contract (msg.sender in constructor)
-    address public immutable finalizer; // keeper/bot
-    address public immutable guardian;  // Safe / ops
+    address public immutable factory;
+    address public immutable finalizer;
+    address public immutable guardian;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MAX_RANGES = 20_000;
-    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000; // 1 USDC (6 decimals)
+    uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
-    uint256 public constant HATCH_DELAY = 2 hours; // trusted-only, but still delay for safety
+    uint256 public constant HATCH_DELAY = 2 hours;
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
 
     uint256 public totalReservedUSDC;
@@ -200,7 +184,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
-        // Scanner-friendly ceilDiv (removes "precision loss" heuristics)
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -229,10 +212,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
 
         status = Status.FundingPending;
     }
-
-    // -------------------------
-    // UX helpers / views
-    // -------------------------
 
     function isFinalizable() public view returns (bool) {
         if (status != Status.Open) return false;
@@ -276,10 +255,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
             upperBounds[i] = tr.upperBound;
         }
     }
-
-    // -------------------------
-    // Core (trusted-only transitions)
-    // -------------------------
 
     function confirmFunding() external onlyFactory {
         if (status != Status.FundingPending) revert NotFundingPending();
@@ -341,11 +316,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
-    /**
-     * @notice TRUSTED-ONLY finalize:
-     * - if expired and minTickets not reached => cancels (must send 0 ETH)
-     * - otherwise requests entropy randomness (must send exact entropy fee)
-     */
     function finalize() external payable nonReentrant onlyFinalizer {
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
@@ -372,7 +342,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value != fee) revert WrongEntropyFee();
 
-        // No block.number (avoid L2 warnings). Entropy provides randomness in callback.
         bytes32 requestSalt = keccak256(abi.encodePacked(address(this), sold, block.timestamp));
         uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, requestSalt, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
@@ -396,10 +365,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         _resolve(randomNumber);
     }
 
-    /**
-     * @notice TRUSTED-ONLY hatch if drawing gets stuck.
-     * Guardian or Finalizer can call after HATCH_DELAY.
-     */
     function forceCancelStuck() external nonReentrant onlyGuardianOrFinalizer {
         if (status != Status.Drawing) revert NotDrawing();
         if (block.timestamp <= drawingRequestedAt + HATCH_DELAY) revert EarlyCancellationRequest();
@@ -488,7 +453,6 @@ contract SingleWinnerRaffle is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-    // Users still self-serve their own funds (no access-control needed)
 
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
