@@ -357,7 +357,235 @@ contract SingleWinnerRaffle is ReentrancyGuard {
     }
 
     // -------------------------
-    // Other UX helpers
+    // Added: ALL UX getters (single-call UI + actions + odds + buy quote + progress + accounting + latest range)
+    // -------------------------
+
+    /// @notice Core state for UIs in one call.
+    function getState()
+        external
+        view
+        returns (
+            Status _status,
+            uint64 _createdAt,
+            uint64 _deadline,
+            uint256 _sold,
+            uint256 _ticketRevenue,
+            uint64 _entropyRequestId,
+            uint64 _drawingRequestedAt,
+            address _winner
+        )
+    {
+        _status = status;
+        _createdAt = createdAt;
+        _deadline = deadline;
+        _sold = getSold();
+        _ticketRevenue = ticketRevenue;
+        _entropyRequestId = entropyRequestId;
+        _drawingRequestedAt = drawingRequestedAt;
+        _winner = winner;
+    }
+
+    /// @notice Full summary snapshot (one-call indexer).
+    function getSummary()
+        external
+        view
+        returns (
+            Status _status,
+            string memory _name,
+            address _creator,
+            address _usdc,
+            uint64 _createdAt,
+            uint64 _deadline,
+            uint256 _ticketPrice,
+            uint256 _winningPot,
+            uint64 _minTickets,
+            uint64 _maxTickets,
+            uint32 _minPurchaseAmount,
+            uint256 _sold,
+            uint256 _ticketRevenue,
+            address _winner,
+            uint64 _entropyRequestId,
+            uint64 _drawingRequestedAt,
+            address _feeRecipient,
+            uint256 _protocolFeePercent,
+            address _finalizer,
+            address _guardian
+        )
+    {
+        _status = status;
+        _name = name;
+        _creator = creator;
+        _usdc = address(usdcToken);
+        _createdAt = createdAt;
+        _deadline = deadline;
+        _ticketPrice = ticketPrice;
+        _winningPot = winningPot;
+        _minTickets = minTickets;
+        _maxTickets = maxTickets;
+        _minPurchaseAmount = minPurchaseAmount;
+        _sold = getSold();
+        _ticketRevenue = ticketRevenue;
+        _winner = winner;
+        _entropyRequestId = entropyRequestId;
+        _drawingRequestedAt = drawingRequestedAt;
+        _feeRecipient = feeRecipient;
+        _protocolFeePercent = protocolFeePercent;
+        _finalizer = finalizer;
+        _guardian = guardian;
+    }
+
+    /// @notice User-specific data in one call.
+    function getUserStats(address user)
+        external
+        view
+        returns (
+            uint256 ownedTickets,
+            uint256 claimable,
+            bool isWinner,
+            bool canRefundTickets,
+            bool canWithdraw
+        )
+    {
+        ownedTickets = ticketsOwned[user];
+        claimable = claimableFunds[user];
+        isWinner = (winner != address(0) && user == winner);
+        canRefundTickets = (status == Status.Canceled && ownedTickets > 0);
+        canWithdraw = (claimable > 0);
+    }
+
+    /// @notice Action flags for UI buttons.
+    function getActions(address user)
+        external
+        view
+        returns (
+            bool canBuy,
+            bool canFinalize,
+            bool canHatch,
+            bool canRefundTickets,
+            bool canWithdraw
+        )
+    {
+        canBuy = (status == Status.Open && block.timestamp < deadline && user != creator);
+        canFinalize = isFinalizable();
+        canHatch = isHatchOpen();
+        canRefundTickets = (status == Status.Canceled && ticketsOwned[user] > 0);
+        canWithdraw = (claimableFunds[user] > 0);
+    }
+
+    /// @notice Odds helper: returns (sold, userTickets, oddsBps) where oddsBps is 0..10000 (basis points).
+    function getOdds(address user)
+        external
+        view
+        returns (uint256 sold, uint256 userTickets, uint256 oddsBps)
+    {
+        sold = getSold();
+        userTickets = ticketsOwned[user];
+        if (sold == 0 || userTickets == 0) return (sold, userTickets, 0);
+
+        // Clamp in case of any mismatch (shouldn't happen).
+        if (userTickets > sold) userTickets = sold;
+
+        oddsBps = Math.mulDiv(userTickets, 10_000, sold);
+        if (oddsBps > 10_000) oddsBps = 10_000;
+    }
+
+    /// @notice Countdown + progress for UI.
+    function getProgress()
+        external
+        view
+        returns (
+            uint256 sold,
+            uint64 _minTickets,
+            uint64 _maxTickets,
+            uint256 remainingToMin,
+            uint256 remainingToMax,
+            uint256 secondsLeft,
+            bool isExpired
+        )
+    {
+        sold = getSold();
+        _minTickets = minTickets;
+        _maxTickets = maxTickets;
+
+        remainingToMin = (sold >= _minTickets) ? 0 : (uint256(_minTickets) - sold);
+
+        if (_maxTickets == 0) {
+            remainingToMax = 0;
+        } else {
+            remainingToMax = (sold >= _maxTickets) ? 0 : (uint256(_maxTickets) - sold);
+        }
+
+        if (block.timestamp >= deadline) {
+            secondsLeft = 0;
+            isExpired = true;
+        } else {
+            secondsLeft = uint256(deadline) - block.timestamp;
+            isExpired = false;
+        }
+    }
+
+    /// @notice Accounting snapshot for monitoring/trust.
+    function getAccounting()
+        external
+        view
+        returns (uint256 contractBalance, uint256 reservedUSDC, uint256 unreservedUSDC, uint256 _winningPot, uint256 _ticketRevenue)
+    {
+        contractBalance = usdcToken.balanceOf(address(this));
+        reservedUSDC = totalReservedUSDC;
+        unreservedUSDC = (contractBalance > reservedUSDC) ? (contractBalance - reservedUSDC) : 0;
+        _winningPot = winningPot;
+        _ticketRevenue = ticketRevenue;
+    }
+
+    /// @notice Quote a buy for UI (especially important with dynamic range min-cost).
+    function quoteBuy(address buyer, uint256 count)
+        external
+        view
+        returns (
+            uint256 totalCost,
+            bool createsNewRange,
+            uint256 currentMinNewRangeCost,
+            bool meetsNewRangeMinCost,
+            uint256 minTicketsToOpenNewRange,
+            uint256 postSold,
+            uint256 postRangeCount
+        )
+    {
+        totalCost = ticketPrice * count;
+        createsNewRange = wouldCreateNewRange(buyer);
+
+        currentMinNewRangeCost = minNewRangeCostNow();
+        meetsNewRangeMinCost = (!createsNewRange) || (totalCost >= currentMinNewRangeCost);
+
+        minTicketsToOpenNewRange = Math.ceilDiv(currentMinNewRangeCost, ticketPrice);
+
+        uint256 sold = getSold();
+        postSold = sold + count;
+
+        uint256 ranges = ticketRanges.length;
+        postRangeCount = createsNewRange ? (ranges + 1) : ranges;
+    }
+
+    /// @notice Latest range details for quick UI display.
+    function getLatestRange()
+        external
+        view
+        returns (bool exists, address buyer, uint96 lowerBound, uint96 upperBound, uint96 size, uint256 rangeIndex)
+    {
+        uint256 len = ticketRanges.length;
+        if (len == 0) return (false, address(0), 0, 0, 0, 0);
+
+        rangeIndex = len - 1;
+        TicketRange storage tr = ticketRanges[rangeIndex];
+        exists = true;
+        buyer = tr.buyer;
+        upperBound = tr.upperBound;
+        lowerBound = (rangeIndex == 0) ? 0 : ticketRanges[rangeIndex - 1].upperBound;
+        size = upperBound - lowerBound;
+    }
+
+    // -------------------------
+    // Core
     // -------------------------
 
     function isFinalizable() public view returns (bool) {
