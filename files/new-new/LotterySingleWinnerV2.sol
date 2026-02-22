@@ -8,10 +8,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
+contract SingleWinnerRaffle is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
-
-    uint32 public constant DEFAULT_CALLBACK_GAS_LIMIT = 500_000;
 
     struct LotteryParams {
         address usdcToken;
@@ -86,6 +84,9 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
     error AccountingMismatch();
     error UnexpectedTransferAmount();
 
+    // Ownership-renounce hard-disable (helps scanners + avoids accidental lockout)
+    error RenounceDisabled();
+
     // Events
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
     event TicketsPurchased(address indexed buyer, uint256 count, uint256 totalCost, uint256 totalSold, uint256 rangeIndex, bool isNewRange);
@@ -106,6 +107,9 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
     event FundingConfirmed(address indexed funder, uint256 amount);
     event SurplusSwept(address indexed to, uint256 amount);
     event NativeSurplusSwept(address indexed to, uint256 amount);
+
+    // New: one-step refund event
+    event TicketRefundClaimed(address indexed user, uint256 amount);
 
     // State
     IERC20 public immutable usdcToken;
@@ -213,6 +217,11 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
         status = Status.FundingPending;
     }
 
+    /// @dev Disable renounceOwnership (scanner-friendly + avoids accidental lockout).
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
+    }
+
     function confirmFunding() external {
         if (msg.sender != deployer) revert NotDeployer();
         if (status != Status.FundingPending) revert NotFundingPending();
@@ -300,9 +309,10 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
         uint256 fee = entropy.getFeeV2(callbackGasLimit);
         if (msg.value < fee) revert InsufficientFee();
 
-        bytes32 userRand = keccak256(abi.encodePacked(address(this), block.prevrandao, block.timestamp));
+        // Salt only: winner randomness comes from Entropy callback randomNumber.
+        bytes32 requestSalt = keccak256(abi.encodePacked(address(this), msg.sender, sold, block.number));
 
-        uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, userRand, callbackGasLimit);
+        uint64 requestId = entropy.requestV2{value: fee}(entropyProvider, requestSalt, callbackGasLimit);
         if (requestId == 0) revert InvalidRequest();
 
         entropyRequestId = requestId;
@@ -313,7 +323,6 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
-     * ✅ The ONLY callback entrypoint you need.
      * Entropy calls this function name/signature on your consumer.
      */
     function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
@@ -441,15 +450,26 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
+    /// @notice ONE-STEP ticket refund: pays USDC immediately on cancellation.
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
+
         uint256 tix = ticketsOwned[msg.sender];
         if (tix == 0) revert NothingToRefund();
+
         uint256 refund = tix * ticketPrice;
+
+        // effects
         ticketsOwned[msg.sender] = 0;
-        claimableFunds[msg.sender] += refund;
+
+        if (totalReservedUSDC < refund) revert AccountingMismatch();
+        totalReservedUSDC -= refund;
+
+        // interaction
+        usdcToken.safeTransfer(msg.sender, refund);
+
         emit PrizeAllocated(msg.sender, refund, 3);
-        emit RefundAllocated(msg.sender, refund);
+        emit TicketRefundClaimed(msg.sender, refund);
     }
 
     function withdrawFunds() external nonReentrant {
@@ -485,23 +505,29 @@ contract LotterySingleWinnerV2 is Ownable, ReentrancyGuard, Pausable {
         emit NativeClaimed(to, amount);
     }
 
-    function sweepSurplus(address to) external onlyOwner nonReentrant {
-        if (to == address(0)) revert ZeroAddress();
+    /// @notice Sweep only after raffle ends, and only to feeRecipient (reduces "owner rug" flags).
+    function sweepSurplus() external onlyOwner nonReentrant {
+        if (status == Status.Open || status == Status.Drawing) revert DrawingsActive();
+
         uint256 currentBalance = usdcToken.balanceOf(address(this));
         if (currentBalance <= totalReservedUSDC) revert NoSurplus();
         uint256 surplus = currentBalance - totalReservedUSDC;
-        usdcToken.safeTransfer(to, surplus);
-        emit SurplusSwept(to, surplus);
+
+        usdcToken.safeTransfer(feeRecipient, surplus);
+        emit SurplusSwept(feeRecipient, surplus);
     }
 
-    function sweepNativeSurplus(address to) external onlyOwner nonReentrant {
-        if (to == address(0)) revert ZeroAddress();
+    /// @notice Sweep only after raffle ends, and only to feeRecipient (reduces "owner rug" flags).
+    function sweepNativeSurplus() external onlyOwner nonReentrant {
+        if (status == Status.Open || status == Status.Drawing) revert DrawingsActive();
+
         uint256 bal = address(this).balance;
         if (bal <= totalClaimableNative) revert NoNativeSurplus();
         uint256 surplus = bal - totalClaimableNative;
-        (bool ok,) = payable(to).call{value: surplus}("");
+
+        (bool ok,) = payable(feeRecipient).call{value: surplus}("");
         if (!ok) revert NativeRefundFailed();
-        emit NativeSurplusSwept(to, surplus);
+        emit NativeSurplusSwept(feeRecipient, surplus);
     }
 
     function setEntropyProvider(address p) external onlyOwner {
