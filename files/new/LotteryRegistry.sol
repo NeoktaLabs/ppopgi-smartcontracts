@@ -45,7 +45,11 @@ contract LotteryRegistry is Ownable2Step {
 
     /// @notice Owner can add/remove registrar(s) at any time (affects only NEW registrations).
     function setRegistrar(address registrar, bool authorized) external onlyOwner {
-        if (authorized && registrar == address(0)) revert ZeroAddress();
+        if (authorized) {
+            if (registrar == address(0)) revert ZeroAddress();
+            // ✅ Quick win: only allow CONTRACT registrars
+            if (registrar.code.length == 0) revert NotContract();
+        }
         isRegistrar[registrar] = authorized;
         emit RegistrarSet(registrar, authorized);
     }
@@ -134,7 +138,7 @@ contract LotteryRegistry is Ownable2Step {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -152,7 +156,7 @@ contract LotteryRegistry is Ownable2Step {
     {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -237,7 +241,7 @@ contract LotteryRegistry is Ownable2Step {
     {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new uint256[](0), new address[](0), new uint64[](0), new address[](0));
+            return (new address, new uint256, new address, new uint64, new address);
         }
 
         uint256 end = start + limit;
@@ -273,7 +277,7 @@ contract LotteryRegistry is Ownable2Step {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new address[](0), new uint64[](0), new address[](0));
+            return (new address, new address, new uint64, new address);
         }
 
         uint256 end = start + limit;
