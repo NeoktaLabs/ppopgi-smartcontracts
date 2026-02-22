@@ -67,7 +67,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error NoParticipants();
     error InvalidRequest();
 
-    // Finalize UX errors (bot-friendly)
     error InvalidFeeAmount(uint256 required, uint256 provided);
 
     error UnauthorizedCallback();
@@ -79,7 +78,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error NothingToClaim();
     error AccountingMismatch();
 
-    // ✅ NEW: explicit access control error
     error NotAuthorized();
 
     event CallbackRejected(uint64 indexed sequenceNumber, uint8 reasonCode);
@@ -111,8 +109,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     address public immutable feeRecipient;
     uint256 public immutable protocolFeePercent;
 
-    // ✅ NEW: the deployer (factory) that created this lottery.
-    // Used to gate confirmFunding / admin-like actions without extra params.
     address public immutable deployer;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
@@ -163,7 +159,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     bool public creatorPotRefunded;
 
-    // Monotonic nonce used as Entropy userRand seed (avoids L2 block.number/blockhash warnings)
     uint64 public finalizeNonce;
 
     modifier onlyDeployer() {
@@ -177,7 +172,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     constructor(LotteryParams memory params) {
-        // ✅ capture deployer early
         deployer = msg.sender;
 
         if (params.entropy == address(0)) revert InvalidEntropy();
@@ -219,7 +213,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         status = Status.FundingPending;
     }
 
-    // ✅ PATCH: restrict funding confirmation to the deployer/factory that created the lottery
     function confirmFunding() external onlyDeployer {
         if (status != Status.FundingPending) revert NotFundingPending();
 
@@ -233,10 +226,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         emit FundingConfirmed(msg.sender, winningPot);
     }
-
-    // =========================
-    // UX / helper views
-    // =========================
 
     function isOpen() external view returns (bool) {
         return status == Status.Open && block.timestamp < deadline;
@@ -310,11 +299,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return entropy.getFeeV2(callbackGasLimit);
     }
 
-    // =========================
-    // Finalization (bot-first)
-    // =========================
-
-    /// @notice Bot-friendly finalize: MUST pay exact Entropy fee (no refunds, no native reclaim).
     function finalizeExact() external payable nonReentrant {
         uint256 fee = getFinalizeFee();
         if (msg.value != fee) revert InvalidFeeAmount(fee, msg.value);
@@ -327,7 +311,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         returns (address[] memory buyers, uint96[] memory upperBounds)
     {
         uint256 n = ticketRanges.length;
-        if (start >= n || limit == 0) return (new address, new uint96);
+        if (start >= n || limit == 0) return (new address[](0), new uint96[](0));
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -637,9 +621,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return ticketRanges[low].buyer;
     }
 
-    // ✅ PATCH: access control made explicit:
-    // - creator/deployer can cancel after PRIVILEGED_HATCH_DELAY
-    // - anyone can cancel only after PUBLIC_HATCH_DELAY (public hatch)
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
 
@@ -655,7 +636,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         _cancelAndRefundCreator("Emergency Recovery");
     }
 
-    // ✅ PATCH: restrict normal cancel to creator/deployer (scanner-friendly)
     function cancel() external nonReentrant onlyCreatorOrDeployer {
         if (status != Status.Open) revert CannotCancel();
         if (block.timestamp < deadline) revert CannotCancel();
