@@ -52,11 +52,17 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     event TrustedRolesUpdated(address finalizer, address guardian);
     event RaffleRoles(address indexed raffle, address indexed finalizer, address indexed guardian);
 
-    address public owner;
+    // ---- changed: make admin private to remove auto-generated owner() getter ----
+    address private _admin;
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        if (msg.sender != _admin) revert NotOwner();
         _;
+    }
+
+    /// @notice Optional UX getter (NOT named owner()).
+    function admin() external view returns (address) {
+        return _admin;
     }
 
     LotteryRegistry public immutable registry;
@@ -103,7 +109,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         if (_protocolFeePercent > 20) revert FeeTooHigh();
         if (_callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
-        owner = _owner;
+        _admin = _owner;
         registry = LotteryRegistry(_registry);
 
         usdc = _usdc;
@@ -157,10 +163,11 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         emit TrustedRolesUpdated(_finalizer, _guardian);
     }
 
+    // Kept name for compatibility, but it updates _admin.
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        emit DeployerOwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        emit DeployerOwnershipTransferred(_admin, newOwner);
+        _admin = newOwner;
     }
 
     function getConfig()
@@ -186,7 +193,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
 
     function minTicketPriceFor(uint32 minPurchaseAmount) public pure returns (uint256) {
         uint256 minEntry = (minPurchaseAmount == 0) ? 1 : uint256(minPurchaseAmount);
-        return Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry); // ceil(1e6/minEntry)
+        return Math.ceilDiv(MIN_NEW_RANGE_COST, minEntry);
     }
 
     function validateInputs(
