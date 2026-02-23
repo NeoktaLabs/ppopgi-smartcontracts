@@ -10,10 +10,6 @@ import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 contract SingleWinnerLottery is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // -------------------------
-    // Params / immutables
-    // -------------------------
-
     struct LotteryParams {
         address usdcToken;
         address entropy;
@@ -26,9 +22,9 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint256 ticketPrice;
         uint256 winningPot;
         uint64 minTickets;
-        uint64 maxTickets; // 0 = no cap (but HARD_CAP_TICKETS still applies)
+        uint64 maxTickets;
         uint64 durationSeconds;
-        uint32 minPurchaseAmount; // 0 = no minimum
+        uint32 minPurchaseAmount;
     }
 
     error InvalidEntropy();
@@ -95,13 +91,15 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     event EmergencyRecovery();
 
-    event FundingConfirmed(address indexed funder, uint256 amount);
-
-    event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
-    event ProtocolFeesCollected(uint256 amount);
-    event FundsClaimed(address indexed user, uint256 amount);
     event RefundAllocated(address indexed user, uint256 amount);
+    event FundsClaimed(address indexed user, uint256 amount);
+    event ProtocolFeesCollected(uint256 amount);
+    event PrizeAllocated(address indexed user, uint256 amount, uint8 indexed reason);
+    event FundingConfirmed(address indexed funder, uint256 amount);
     event TicketRefundClaimed(address indexed user, uint256 amount);
+
+    // ---- NEW: unified-claim UX event ----
+    event Claimed(address indexed user, uint256 funds, uint256 ticketRefund, uint256 total);
 
     IERC20 public immutable usdcToken;
     address public immutable creator;
@@ -114,45 +112,22 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
     address public immutable factory;
 
-    // -------------------------
-    // Constants
-    // -------------------------
-
     uint256 public constant MAX_BATCH_BUY = 1000;
-
-    // Prevent storage blowups / DoS by forcing big buyers to keep ranges bounded.
     uint256 public constant MAX_RANGES = 100_000;
 
-    // Base min cost to create a NEW range (USDC 6 decimals)
     uint256 public constant MIN_NEW_RANGE_COST_BASE = 1_000_000; // 1 USDC
-
-    // Ramp: +1 USDC every 10,000 ranges
     uint256 public constant RANGE_STEP = 10_000;
     uint256 public constant RANGE_COST_STEP = 1_000_000; // 1 USDC
 
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
     uint256 public constant MAX_POT_SIZE = 10_000_000 * 1e6;
     uint64 public constant MAX_DURATION = 365 days;
-
-    // Emergency hatch delay after requesting entropy.
     uint256 public constant HATCH_DELAY = 2 hours;
-
-    // Safety cap regardless of maxTickets.
     uint256 public constant HARD_CAP_TICKETS = 10_000_000;
-
-    // -------------------------
-    // State
-    // -------------------------
 
     uint256 public totalReservedUSDC;
 
-    enum Status {
-        FundingPending,
-        Open,
-        Drawing,
-        Completed,
-        Canceled
-    }
+    enum Status { FundingPending, Open, Drawing, Completed, Canceled }
     Status public status;
 
     string public name;
@@ -168,21 +143,15 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint32 public minPurchaseAmount;
 
     address public winner;
-
-    // Drawing state
     address public selectedProvider;
     uint64 public drawingRequestedAt;
     uint64 public entropyRequestId;
     uint256 public soldAtDrawing;
 
-    // Cancel metadata
     uint256 public soldAtCancel;
     uint64 public canceledAt;
 
-    struct TicketRange {
-        address buyer;
-        uint96 upperBound; // exclusive end of buyer's interval (0..sold)
-    }
+    struct TicketRange { address buyer; uint96 upperBound; }
     TicketRange[] public ticketRanges;
 
     mapping(address => uint256) public ticketsOwned;
@@ -215,7 +184,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
-        // At deployment, tier is 0 => base min range cost.
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST_BASE, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -243,32 +211,27 @@ contract SingleWinnerLottery is ReentrancyGuard {
     }
 
     // -------------------------
-    // UX / UI helpers
+    // Range policy + UX getters
     // -------------------------
 
-    /// @notice Minimum totalCost required to CREATE a new range at a given rangeCount (before adding the new one).
     function minNewRangeCostAt(uint256 rangeCount) public pure returns (uint256) {
         uint256 tier = rangeCount / RANGE_STEP;
         return MIN_NEW_RANGE_COST_BASE + (tier * RANGE_COST_STEP);
     }
 
-    /// @notice Minimum totalCost required to create a new range RIGHT NOW.
     function minNewRangeCostNow() public view returns (uint256) {
         return minNewRangeCostAt(ticketRanges.length);
     }
 
-    /// @notice Minimum ticket count required (at current ticketPrice) to be allowed to create a new range RIGHT NOW.
     function minTicketsToOpenNewRangeNow() external view returns (uint256) {
         return Math.ceilDiv(minNewRangeCostNow(), ticketPrice);
     }
 
-    /// @notice Whether a buyer would create a new range (i.e., buyer != last buyer).
     function wouldCreateNewRange(address buyer) public view returns (bool) {
         uint256 len = ticketRanges.length;
         return (len == 0 || ticketRanges[len - 1].buyer != buyer);
     }
 
-    /// @notice Range policy constants in one call.
     function getRangePolicy()
         external
         pure
@@ -277,7 +240,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return (MAX_RANGES, RANGE_STEP, MIN_NEW_RANGE_COST_BASE, RANGE_COST_STEP);
     }
 
-    /// @notice Current tier info to show users why min changes over time.
     function getRangeTierInfo()
         external
         view
@@ -297,12 +259,10 @@ contract SingleWinnerLottery is ReentrancyGuard {
         rangesUntilNextTier = (rangeCount >= nextTierAtRangeCount) ? 0 : (nextTierAtRangeCount - rangeCount);
     }
 
-    /// @notice Range count.
     function getTicketRangesCount() external view returns (uint256) {
         return ticketRanges.length;
     }
 
-    /// @notice Get a single range with explicit lowerBound/size (better UX than only upperBound).
     function getRangeAt(uint256 index)
         external
         view
@@ -318,7 +278,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         size = upperBound - lowerBound;
     }
 
-    /// @notice Paginated ranges including lowerBounds for UI rendering.
     function getRangesWithBounds(uint256 start, uint256 limit)
         external
         view
@@ -344,59 +303,12 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
-    /// @notice Find which range owns a ticket index (0..sold-1).
     function findRangeForTicket(uint256 ticketIndex) external view returns (uint256 rangeIndex, address buyer) {
         uint256 sold = getSold();
         if (ticketIndex >= sold) revert AccountingMismatch();
         rangeIndex = _findRangeIndex(ticketIndex);
         buyer = ticketRanges[rangeIndex].buyer;
     }
-
-    /// @notice Single-call UI summary (handy for frontends).
-    function getSummary()
-        external
-        view
-        returns (
-            Status _status,
-            uint64 _createdAt,
-            uint64 _deadline,
-            uint256 sold,
-            uint256 _ticketPrice,
-            uint256 _winningPot,
-            uint256 _ticketRevenue,
-            uint64 _minTickets,
-            uint64 _maxTickets,
-            uint32 _minPurchaseAmount,
-            bool finalizable,
-            bool hatchOpen,
-            uint256 entropyFeeNow,
-            address _winner
-        )
-    {
-        _status = status;
-        _createdAt = createdAt;
-        _deadline = deadline;
-        sold = getSold();
-        _ticketPrice = ticketPrice;
-        _winningPot = winningPot;
-        _ticketRevenue = ticketRevenue;
-        _minTickets = minTickets;
-        _maxTickets = maxTickets;
-        _minPurchaseAmount = minPurchaseAmount;
-        finalizable = isFinalizable();
-        hatchOpen = isHatchOpen();
-        entropyFeeNow = entropy.getFeeV2(callbackGasLimit);
-        _winner = winner;
-    }
-
-    /// @notice UI helper for per-user balances.
-    function getUserInfo(address user) external view returns (uint256 tickets, uint256 claimable) {
-        return (ticketsOwned[user], claimableFunds[user]);
-    }
-
-    // -------------------------
-    // Internals
-    // -------------------------
 
     function _findRangeIndex(uint256 winningTicket) internal view returns (uint256) {
         uint256 low = 0;
@@ -407,6 +319,52 @@ contract SingleWinnerLottery is ReentrancyGuard {
             else low = mid + 1;
         }
         return low;
+    }
+
+    // -------------------------
+    // Dashboard summary (NEW)
+    // -------------------------
+
+    function getSummary()
+        external
+        view
+        returns (
+            Status _status,
+            string memory _name,
+            uint64 _createdAt,
+            uint64 _deadline,
+            uint256 _ticketPrice,
+            uint256 _winningPot,
+            uint256 _ticketRevenue,
+            uint64 _minTickets,
+            uint64 _maxTickets,
+            uint32 _minPurchaseAmount,
+            uint256 _sold,
+            address _winner,
+            uint64 _entropyRequestId,
+            uint64 _drawingRequestedAt,
+            address _selectedProvider,
+            bool _isFinalizable,
+            bool _isHatchOpen
+        )
+    {
+        _status = status;
+        _name = name;
+        _createdAt = createdAt;
+        _deadline = deadline;
+        _ticketPrice = ticketPrice;
+        _winningPot = winningPot;
+        _ticketRevenue = ticketRevenue;
+        _minTickets = minTickets;
+        _maxTickets = maxTickets;
+        _minPurchaseAmount = minPurchaseAmount;
+        _sold = getSold();
+        _winner = winner;
+        _entropyRequestId = entropyRequestId;
+        _drawingRequestedAt = drawingRequestedAt;
+        _selectedProvider = selectedProvider;
+        _isFinalizable = isFinalizable();
+        _isHatchOpen = isHatchOpen();
     }
 
     // -------------------------
@@ -429,10 +387,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     function quoteEntropyFee() external view returns (uint256) {
         return entropy.getFeeV2(callbackGasLimit);
     }
-
-    // -------------------------
-    // Lifecycle
-    // -------------------------
 
     function confirmFunding() external onlyFactory {
         if (status != Status.FundingPending) revert NotFundingPending();
@@ -466,7 +420,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
-
             uint256 minCost = minNewRangeCostAt(ticketRanges.length);
             if (totalCost < minCost) revert BatchTooCheap();
         }
@@ -507,7 +460,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         if (!isFull && !isExpired) revert NotReadyToFinalize();
 
-        // If expired but min tickets not reached -> cancel and allow refunds
         if (isExpired && sold < minTickets) {
             if (msg.value != 0) revert WrongEntropyFee();
             _cancelAndRefundCreator("Min tickets not reached");
@@ -628,9 +580,41 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryCanceled(reason, soldSnapshot, ticketRevenue, potRefund);
     }
 
-    // -------------------------
-    // Claims / refunds
-    // -------------------------
+    // ---- NEW: one-button claim ----
+    function claim() external nonReentrant returns (uint256 totalPaid) {
+        uint256 funds = claimableFunds[msg.sender];
+        uint256 refund = 0;
+
+        if (status == Status.Canceled) {
+            uint256 tix = ticketsOwned[msg.sender];
+            if (tix > 0) {
+                refund = tix * ticketPrice;
+                ticketsOwned[msg.sender] = 0;
+            }
+        }
+
+        if (funds == 0 && refund == 0) revert NothingToClaim();
+
+        if (funds > 0) {
+            claimableFunds[msg.sender] = 0;
+        }
+
+        totalPaid = funds + refund;
+
+        if (totalReservedUSDC < totalPaid) revert AccountingMismatch();
+        totalReservedUSDC -= totalPaid;
+
+        usdcToken.safeTransfer(msg.sender, totalPaid);
+
+        // keep older events for indexers/compat
+        if (funds > 0) emit FundsClaimed(msg.sender, funds);
+        if (refund > 0) emit TicketRefundClaimed(msg.sender, refund);
+
+        emit Claimed(msg.sender, funds, refund, totalPaid);
+    }
+
+    // If you still want the old explicit functions, you can keep them.
+    // But for “simple UX”, I recommend your dashboard uses claim() only.
 
     function claimTicketRefund() external nonReentrant {
         if (status != Status.Canceled) revert NotCanceled();
@@ -662,10 +646,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         usdcToken.safeTransfer(msg.sender, amount);
         emit FundsClaimed(msg.sender, amount);
     }
-
-    // -------------------------
-    // Core getters
-    // -------------------------
 
     function getSold() public view returns (uint256) {
         uint256 len = ticketRanges.length;
