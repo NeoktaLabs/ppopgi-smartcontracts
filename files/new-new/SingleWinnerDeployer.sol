@@ -28,8 +28,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address provider,
         uint32 callbackGasLimit,
         address feeRecipient,
-        uint256 protocolFeePercent,
-        address finalizer
+        uint256 protocolFeePercent
     );
 
     event LotteryDeployed(
@@ -49,7 +48,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets
     );
 
-    // admin kept private (no auto-generated getter)
     address private _admin;
 
     modifier onlyOwner() {
@@ -67,9 +65,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
-    // kept to match SingleWinnerLottery params (lottery does not enforce it today)
-    address public finalizer;
-
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
     uint256 public constant MAX_TICKET_PRICE = 100_000 * 1e6;
@@ -84,8 +79,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address _entropyProvider,
         uint32 _callbackGasLimit,
         address _feeRecipient,
-        uint256 _protocolFeePercent,
-        address _finalizer
+        uint256 _protocolFeePercent
     ) {
         if (
             _owner == address(0) ||
@@ -93,8 +87,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             _usdc == address(0) ||
             _entropy == address(0) ||
             _entropyProvider == address(0) ||
-            _feeRecipient == address(0) ||
-            _finalizer == address(0)
+            _feeRecipient == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -109,17 +102,9 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         callbackGasLimit = _callbackGasLimit;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-        finalizer = _finalizer;
 
         emit DeployerOwnershipTransferred(address(0), _owner);
-        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
-    }
-
-    // Optional but useful for future admin rotation (multisig change, etc).
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit DeployerOwnershipTransferred(_admin, newOwner);
-        _admin = newOwner;
+        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
     }
 
     function setConfig(
@@ -128,15 +113,13 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         address _provider,
         uint32 _callbackGasLimit,
         address _feeRecipient,
-        uint256 _protocolFeePercent,
-        address _finalizer
+        uint256 _protocolFeePercent
     ) external onlyOwner {
         if (
             _usdc == address(0) ||
             _entropy == address(0) ||
             _provider == address(0) ||
-            _feeRecipient == address(0) ||
-            _finalizer == address(0)
+            _feeRecipient == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -148,9 +131,14 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         callbackGasLimit = _callbackGasLimit;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-        finalizer = _finalizer;
 
-        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
+        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
+    }
+
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit DeployerOwnershipTransferred(_admin, newOwner);
+        _admin = newOwner;
     }
 
     function getConfig()
@@ -162,26 +150,28 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             address provider,
             uint32 gasLimit,
             address feeTo,
-            uint256 feePercent,
-            address _finalizer
+            uint256 feePercent
         )
     {
-        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent, finalizer);
+        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent);
     }
 
-    /// @notice UI helper to avoid hardcoding deployer limits in frontend.
-    function getLimits()
+    // ---- UX helper: one call for “config screen” ----
+    function getSummary()
         external
-        pure
+        view
         returns (
-            uint256 maxBatchBuy,
-            uint256 minNewRangeCost,
-            uint256 maxTicketPrice,
-            uint256 maxPotSize,
-            uint64 maxDuration
+            address registryAddr,
+            uint256 typeId,
+            address usdcToken,
+            address entropyContract,
+            address provider,
+            uint32 gasLimit,
+            address feeTo,
+            uint256 feePercent
         )
     {
-        return (MAX_BATCH_BUY, MIN_NEW_RANGE_COST, MAX_TICKET_PRICE, MAX_POT_SIZE, MAX_DURATION);
+        return (address(registry), SINGLE_WINNER_TYPE_ID, usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent);
     }
 
     function quoteEntropyFee() external view returns (uint256 fee) {
@@ -236,8 +226,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             minTickets: minTickets,
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
-            minPurchaseAmount: minPurchaseAmount,
-            finalizer: finalizer
+            minPurchaseAmount: minPurchaseAmount
         });
     }
 
@@ -266,8 +255,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             minTickets: minTickets,
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
-            minPurchaseAmount: minPurchaseAmount,
-            finalizer: finalizer
+            minPurchaseAmount: minPurchaseAmount
         });
 
         SingleWinnerLottery lot = new SingleWinnerLottery(params);
