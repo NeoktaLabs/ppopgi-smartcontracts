@@ -49,8 +49,8 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint256 protocolFeePercent
     );
 
-    event TrustedRolesUpdated(address finalizer, address guardian);
-    event RaffleRoles(address indexed raffle, address indexed finalizer, address indexed guardian);
+    event FinalizerUpdated(address finalizer);
+    event RaffleFinalizer(address indexed raffle, address indexed finalizer);
 
     // ---- changed: admin is private and NO external getter exists ----
     address private _admin;
@@ -69,8 +69,9 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     uint32 public callbackGasLimit;
     address public feeRecipient;
     uint256 public protocolFeePercent;
+
+    // kept to match SingleWinnerLottery params (even if the lottery doesn't currently enforce it)
     address public finalizer;
-    address public guardian;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
     uint256 public constant MIN_NEW_RANGE_COST = 1_000_000;
@@ -87,8 +88,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint32 _callbackGasLimit,
         address _feeRecipient,
         uint256 _protocolFeePercent,
-        address _finalizer,
-        address _guardian
+        address _finalizer
     ) {
         if (
             _owner == address(0) ||
@@ -97,8 +97,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             _entropy == address(0) ||
             _entropyProvider == address(0) ||
             _feeRecipient == address(0) ||
-            _finalizer == address(0) ||
-            _guardian == address(0)
+            _finalizer == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -115,11 +114,10 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         protocolFeePercent = _protocolFeePercent;
 
         finalizer = _finalizer;
-        guardian = _guardian;
 
         emit DeployerOwnershipTransferred(address(0), _owner);
         emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
-        emit TrustedRolesUpdated(_finalizer, _guardian);
+        emit FinalizerUpdated(_finalizer);
     }
 
     function setConfig(
@@ -129,16 +127,14 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint32 _callbackGasLimit,
         address _feeRecipient,
         uint256 _protocolFeePercent,
-        address _finalizer,
-        address _guardian
+        address _finalizer
     ) external onlyOwner {
         if (
             _usdc == address(0) ||
             _entropy == address(0) ||
             _provider == address(0) ||
             _feeRecipient == address(0) ||
-            _finalizer == address(0) ||
-            _guardian == address(0)
+            _finalizer == address(0)
         ) revert ZeroAddress();
 
         if (_protocolFeePercent > 20) revert FeeTooHigh();
@@ -152,10 +148,9 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         protocolFeePercent = _protocolFeePercent;
 
         finalizer = _finalizer;
-        guardian = _guardian;
 
         emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
-        emit TrustedRolesUpdated(_finalizer, _guardian);
+        emit FinalizerUpdated(_finalizer);
     }
 
     // Kept name for compatibility, but it updates _admin.
@@ -175,11 +170,10 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             uint32 gasLimit,
             address feeTo,
             uint256 feePercent,
-            address _finalizer,
-            address _guardian
+            address _finalizer
         )
     {
-        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent, finalizer, guardian);
+        return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent, finalizer);
     }
 
     function quoteEntropyFee() external view returns (uint256 fee) {
@@ -235,8 +229,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
             minPurchaseAmount: minPurchaseAmount,
-            finalizer: finalizer,
-            guardian: guardian
+            finalizer: finalizer
         });
     }
 
@@ -266,8 +259,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             maxTickets: maxTickets,
             durationSeconds: durationSeconds,
             minPurchaseAmount: minPurchaseAmount,
-            finalizer: finalizer,
-            guardian: guardian
+            finalizer: finalizer
         });
 
         SingleWinnerLottery lot = new SingleWinnerLottery(params);
@@ -301,6 +293,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             maxTickets
         );
 
-        emit RaffleRoles(lotteryAddr, finalizer, guardian);
+        emit RaffleFinalizer(lotteryAddr, finalizer);
     }
 }
