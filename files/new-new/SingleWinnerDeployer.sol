@@ -18,10 +18,19 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     error FeeTooHigh();
     error NotAuthorizedRegistrar();
     error InvalidCallbackGasLimit();
-
     error RegistryRegistrationFailed(bytes lowLevelData);
 
     event DeployerOwnershipTransferred(address indexed oldOwner, address indexed newOwner);
+
+    event ConfigUpdated(
+        address usdc,
+        address entropy,
+        address provider,
+        uint32 callbackGasLimit,
+        address feeRecipient,
+        uint256 protocolFeePercent,
+        address finalizer
+    );
 
     event LotteryDeployed(
         address indexed lottery,
@@ -40,19 +49,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets
     );
 
-    event ConfigUpdated(
-        address usdc,
-        address entropy,
-        address provider,
-        uint32 callbackGasLimit,
-        address feeRecipient,
-        uint256 protocolFeePercent
-    );
-
-    event FinalizerUpdated(address finalizer);
-    event RaffleFinalizer(address indexed raffle, address indexed finalizer);
-
-    // ---- changed: admin is private and NO external getter exists ----
     address private _admin;
 
     modifier onlyOwner() {
@@ -70,7 +66,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
-    // kept to match SingleWinnerLottery params (even if the lottery doesn't currently enforce it)
+    // kept to match SingleWinnerLottery params (even if lottery doesn't currently enforce it)
     address public finalizer;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
@@ -112,12 +108,10 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         callbackGasLimit = _callbackGasLimit;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-
         finalizer = _finalizer;
 
         emit DeployerOwnershipTransferred(address(0), _owner);
-        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
-        emit FinalizerUpdated(_finalizer);
+        emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
     }
 
     function setConfig(
@@ -146,14 +140,11 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         callbackGasLimit = _callbackGasLimit;
         feeRecipient = _feeRecipient;
         protocolFeePercent = _protocolFeePercent;
-
         finalizer = _finalizer;
 
-        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent);
-        emit FinalizerUpdated(_finalizer);
+        emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
     }
 
-    // Kept name for compatibility, but it updates _admin.
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
         emit DeployerOwnershipTransferred(_admin, newOwner);
@@ -292,7 +283,5 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             minTickets,
             maxTickets
         );
-
-        emit RaffleFinalizer(lotteryAddr, finalizer);
     }
 }
