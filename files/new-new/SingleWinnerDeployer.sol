@@ -219,8 +219,8 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets,
         uint64 durationSeconds,
         uint32 minPurchaseAmount
-    ) external view returns (SingleWinnerRaffle.LotteryParams memory params) {
-        params = SingleWinnerRaffle.LotteryParams({
+    ) external view returns (SingleWinnerLottery.LotteryParams memory params) {
+        params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
             entropyProvider: entropyProvider,
@@ -251,7 +251,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     ) external nonReentrant returns (address lotteryAddr) {
         if (!registry.isRegistrar(address(this))) revert NotAuthorizedRegistrar();
 
-        SingleWinnerRaffle.LotteryParams memory params = SingleWinnerRaffle.LotteryParams({
+        SingleWinnerLottery.LotteryParams memory params = SingleWinnerLottery.LotteryParams({
             usdcToken: usdc,
             entropy: entropy,
             entropyProvider: entropyProvider,
@@ -270,7 +270,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
             guardian: guardian
         });
 
-        SingleWinnerRaffle lot = new SingleWinnerRaffle(params);
+        SingleWinnerLottery lot = new SingleWinnerLottery(params);
 
         IERC20(usdc).safeTransferFrom(msg.sender, address(lot), winningPot);
         lot.confirmFunding();

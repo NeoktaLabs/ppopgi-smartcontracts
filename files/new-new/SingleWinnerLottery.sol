@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@pythnetwork/entropy-sdk-solidity/IEntropyV2.sol";
 
-contract SingleWinnerRaffle is ReentrancyGuard {
+contract SingleWinnerLottery is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct LotteryParams {
