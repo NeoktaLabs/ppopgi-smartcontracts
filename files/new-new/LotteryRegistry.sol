@@ -15,7 +15,7 @@ contract LotteryRegistry {
 
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
-    // admin kept private (no auto-generated getter)
+    // admin kept private (no owner() getter)
     address private _admin;
 
     modifier onlyOwner() {
@@ -29,7 +29,6 @@ contract LotteryRegistry {
         emit OwnershipTransferred(address(0), _owner);
     }
 
-    // Optional but useful for future admin rotation (multisig change, etc).
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
         emit OwnershipTransferred(_admin, newOwner);
@@ -43,7 +42,6 @@ contract LotteryRegistry {
     mapping(uint256 => address[]) internal lotteriesByType;
     mapping(address => bool) public isRegistrar;
 
-    // Index helpers (1-based to distinguish unset)
     mapping(address => uint256) public allIndexPlusOne;
     mapping(uint256 => mapping(address => uint256)) public typeIndexPlusOne;
 
@@ -80,22 +78,14 @@ contract LotteryRegistry {
         emit LotteryRegistered(allIndex, typeId, lottery, creator);
     }
 
-    // --- UX helpers ---
-
     function isRegisteredLottery(address lottery) external view returns (bool) {
         return typeIdOf[lottery] != 0;
     }
 
-    /// @notice Single-call meta lookup for UIs (saves multiple mapping reads).
-    function getLotteryMeta(address lottery)
-        external
-        view
-        returns (bool registered, uint256 typeId, address creator, uint64 ts)
-    {
-        typeId = typeIdOf[lottery];
-        registered = (typeId != 0);
-        creator = creatorOf[lottery];
-        ts = registeredAt[lottery];
+    // ---- UX helper: single call for “home page” widgets ----
+    function getSummary() external view returns (uint256 totalLotteries, address latestLottery) {
+        totalLotteries = allLotteries.length;
+        latestLottery = (totalLotteries == 0) ? address(0) : allLotteries[totalLotteries - 1];
     }
 
     function getAllLotteriesCount() external view returns (uint256) {
@@ -193,7 +183,11 @@ contract LotteryRegistry {
     function getLotteriesByTypeWithMeta(uint256 typeId, uint256 start, uint256 limit)
         external
         view
-        returns (address[] memory lotteries, address[] memory creators, uint64[] memory timestamps)
+        returns (
+            address[] memory lotteries,
+            address[] memory creators,
+            uint64[] memory timestamps
+        )
     {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
