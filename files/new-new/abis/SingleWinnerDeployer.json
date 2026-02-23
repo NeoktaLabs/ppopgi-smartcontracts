@@ -1,0 +1,815 @@
+[
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_owner",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_registry",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_usdc",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_entropy",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_entropyProvider",
+				"type": "address"
+			},
+			{
+				"internalType": "uint32",
+				"name": "_callbackGasLimit",
+				"type": "uint32"
+			},
+			{
+				"internalType": "address",
+				"name": "_feeRecipient",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_protocolFeePercent",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"inputs": [],
+		"name": "FeeTooHigh",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "InvalidCallbackGasLimit",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "NotAuthorizedRegistrar",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "NotOwner",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "ReentrancyGuardReentrantCall",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes",
+				"name": "lowLevelData",
+				"type": "bytes"
+			}
+		],
+		"name": "RegistryRegistrationFailed",
+		"type": "error"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			}
+		],
+		"name": "SafeERC20FailedOperation",
+		"type": "error"
+	},
+	{
+		"inputs": [],
+		"name": "ZeroAddress",
+		"type": "error"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "usdc",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "entropy",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "provider",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint32",
+				"name": "callbackGasLimit",
+				"type": "uint32"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "feeRecipient",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "protocolFeePercent",
+				"type": "uint256"
+			}
+		],
+		"name": "ConfigUpdated",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "oldOwner",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "DeployerOwnershipTransferred",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "lottery",
+				"type": "address"
+			},
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "creator",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "winningPot",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "ticketPrice",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "usdc",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "entropy",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "entropyProvider",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint32",
+				"name": "callbackGasLimit",
+				"type": "uint32"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "feeRecipient",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "protocolFeePercent",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint64",
+				"name": "deadline",
+				"type": "uint64"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint64",
+				"name": "minTickets",
+				"type": "uint64"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint64",
+				"name": "maxTickets",
+				"type": "uint64"
+			}
+		],
+		"name": "LotteryDeployed",
+		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_BATCH_BUY",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_DURATION",
+		"outputs": [
+			{
+				"internalType": "uint64",
+				"name": "",
+				"type": "uint64"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_POT_SIZE",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_TICKET_PRICE",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MIN_NEW_RANGE_COST",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "SINGLE_WINNER_TYPE_ID",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "creator_",
+				"type": "address"
+			},
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "uint256",
+				"name": "ticketPrice",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "winningPot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint64",
+				"name": "minTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "maxTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "durationSeconds",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint32",
+				"name": "minPurchaseAmount",
+				"type": "uint32"
+			}
+		],
+		"name": "buildParams",
+		"outputs": [
+			{
+				"components": [
+					{
+						"internalType": "address",
+						"name": "usdcToken",
+						"type": "address"
+					},
+					{
+						"internalType": "address",
+						"name": "entropy",
+						"type": "address"
+					},
+					{
+						"internalType": "address",
+						"name": "entropyProvider",
+						"type": "address"
+					},
+					{
+						"internalType": "uint32",
+						"name": "callbackGasLimit",
+						"type": "uint32"
+					},
+					{
+						"internalType": "address",
+						"name": "feeRecipient",
+						"type": "address"
+					},
+					{
+						"internalType": "uint256",
+						"name": "protocolFeePercent",
+						"type": "uint256"
+					},
+					{
+						"internalType": "address",
+						"name": "creator",
+						"type": "address"
+					},
+					{
+						"internalType": "string",
+						"name": "name",
+						"type": "string"
+					},
+					{
+						"internalType": "uint256",
+						"name": "ticketPrice",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "winningPot",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint64",
+						"name": "minTickets",
+						"type": "uint64"
+					},
+					{
+						"internalType": "uint64",
+						"name": "maxTickets",
+						"type": "uint64"
+					},
+					{
+						"internalType": "uint64",
+						"name": "durationSeconds",
+						"type": "uint64"
+					},
+					{
+						"internalType": "uint32",
+						"name": "minPurchaseAmount",
+						"type": "uint32"
+					}
+				],
+				"internalType": "struct SingleWinnerLottery.LotteryParams",
+				"name": "params",
+				"type": "tuple"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "callbackGasLimit",
+		"outputs": [
+			{
+				"internalType": "uint32",
+				"name": "",
+				"type": "uint32"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "uint256",
+				"name": "ticketPrice",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "winningPot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint64",
+				"name": "minTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "maxTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "durationSeconds",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint32",
+				"name": "minPurchaseAmount",
+				"type": "uint32"
+			}
+		],
+		"name": "createSingleWinnerLottery",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "lotteryAddr",
+				"type": "address"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "entropy",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "entropyProvider",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "feeRecipient",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getConfig",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "usdcToken",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "entropyContract",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "provider",
+				"type": "address"
+			},
+			{
+				"internalType": "uint32",
+				"name": "gasLimit",
+				"type": "uint32"
+			},
+			{
+				"internalType": "address",
+				"name": "feeTo",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "feePercent",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getSummary",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "registryAddr",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "typeId",
+				"type": "uint256"
+			},
+			{
+				"internalType": "address",
+				"name": "usdcToken",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "entropyContract",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "provider",
+				"type": "address"
+			},
+			{
+				"internalType": "uint32",
+				"name": "gasLimit",
+				"type": "uint32"
+			},
+			{
+				"internalType": "address",
+				"name": "feeTo",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "feePercent",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint32",
+				"name": "minPurchaseAmount",
+				"type": "uint32"
+			}
+		],
+		"name": "minTicketPriceFor",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "pure",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "protocolFeePercent",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "quoteEntropyFee",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "fee",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "registry",
+		"outputs": [
+			{
+				"internalType": "contract LotteryRegistry",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_usdc",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_entropy",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "_provider",
+				"type": "address"
+			},
+			{
+				"internalType": "uint32",
+				"name": "_callbackGasLimit",
+				"type": "uint32"
+			},
+			{
+				"internalType": "address",
+				"name": "_feeRecipient",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_protocolFeePercent",
+				"type": "uint256"
+			}
+		],
+		"name": "setConfig",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "transferOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "usdc",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "ticketPrice",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "winningPot",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint64",
+				"name": "minTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "maxTickets",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint64",
+				"name": "durationSeconds",
+				"type": "uint64"
+			},
+			{
+				"internalType": "uint32",
+				"name": "minPurchaseAmount",
+				"type": "uint32"
+			}
+		],
+		"name": "validateInputs",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "ok",
+				"type": "bool"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "reason",
+				"type": "bytes32"
+			}
+		],
+		"stateMutability": "pure",
+		"type": "function"
+	}
+]
