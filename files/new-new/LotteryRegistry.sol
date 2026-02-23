@@ -15,23 +15,25 @@ contract LotteryRegistry {
 
     event LotteryRegistered(uint256 indexed index, uint256 indexed typeId, address indexed lottery, address creator);
 
-    address public owner;
+    // ---- changed: make admin private to remove auto-generated owner() getter ----
+    address private _admin;
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        if (msg.sender != _admin) revert NotOwner();
         _;
     }
 
     constructor(address _owner) {
         if (_owner == address(0)) revert ZeroAddress();
-        owner = _owner;
+        _admin = _owner;
         emit OwnershipTransferred(address(0), _owner);
     }
 
+    // Kept name for compatibility, but it updates _admin.
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        emit OwnershipTransferred(_admin, newOwner);
+        _admin = newOwner;
     }
 
     address[] public allLotteries;
@@ -77,7 +79,6 @@ contract LotteryRegistry {
         emit LotteryRegistered(allIndex, typeId, lottery, creator);
     }
 
-
     function isRegisteredLottery(address lottery) external view returns (bool) {
         return typeIdOf[lottery] != 0;
     }
@@ -116,7 +117,7 @@ contract LotteryRegistry {
 
     function getAllLotteries(uint256 start, uint256 limit) external view returns (address[] memory page) {
         uint256 n = allLotteries.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -130,7 +131,7 @@ contract LotteryRegistry {
     function getLotteriesByType(uint256 typeId, uint256 start, uint256 limit) external view returns (address[] memory page) {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
-        if (start >= n || limit == 0) return new address[](0);
+        if (start >= n || limit == 0) return new address;
 
         uint256 end = start + limit;
         if (end > n) end = n;
@@ -153,7 +154,7 @@ contract LotteryRegistry {
     {
         uint256 n = allLotteries.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new uint256[](0), new address[](0), new uint64[](0));
+            return (new address, new uint256, new address, new uint64);
         }
 
         uint256 end = start + limit;
@@ -186,7 +187,7 @@ contract LotteryRegistry {
         address[] storage arr = lotteriesByType[typeId];
         uint256 n = arr.length;
         if (start >= n || limit == 0) {
-            return (new address[](0), new address[](0), new uint64[](0));
+            return (new address, new address, new uint64);
         }
 
         uint256 end = start + limit;
