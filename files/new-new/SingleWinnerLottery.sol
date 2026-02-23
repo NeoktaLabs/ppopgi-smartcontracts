@@ -25,11 +25,8 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint64 maxTickets;
         uint64 durationSeconds;
         uint32 minPurchaseAmount;
-        address finalizer; // kept (optional metadata / future use)
-        // guardian removed
     }
 
-    error ZeroAddress();
     error InvalidEntropy();
     error InvalidProvider();
     error InvalidUSDC();
@@ -67,8 +64,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
     error InvalidRequest();
 
     error UnauthorizedCallback();
-    error UnauthorizedFinalizer(); // kept (even if not currently used for finalize)
-    // UnauthorizedGuardian removed
 
     error NotDrawing();
     error NotCanceled();
@@ -109,15 +104,14 @@ contract SingleWinnerLottery is ReentrancyGuard {
     uint32 public immutable callbackGasLimit;
 
     address public immutable factory;
-    address public immutable finalizer; // kept (optional metadata / future use)
-    // guardian removed
 
     uint256 public constant MAX_BATCH_BUY = 1000;
-
     uint256 public constant MAX_RANGES = 100_000;
 
+    // Base min cost to create a NEW range (USDC 6 decimals)
     uint256 public constant MIN_NEW_RANGE_COST_BASE = 1_000_000; // 1 USDC
 
+    // Ramp: +1 USDC every 10,000 ranges
     uint256 public constant RANGE_STEP = 10_000;
     uint256 public constant RANGE_COST_STEP = 1_000_000; // 1 USDC
 
@@ -175,8 +169,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         _;
     }
 
-    // onlyFinalizer + onlyGuardianOrFinalizer removed
-
     constructor(LotteryParams memory params) {
         factory = msg.sender;
 
@@ -185,7 +177,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.entropyProvider == address(0)) revert InvalidProvider();
         if (params.feeRecipient == address(0)) revert InvalidFeeRecipient();
         if (params.creator == address(0)) revert InvalidCreator();
-        if (params.finalizer == address(0)) revert ZeroAddress(); // keep non-zero invariant if you still want it
         if (params.protocolFeePercent > 20) revert FeeTooHigh();
         if (params.callbackGasLimit == 0) revert InvalidCallbackGasLimit();
 
@@ -198,6 +189,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (params.minPurchaseAmount > MAX_BATCH_BUY) revert BatchTooLarge();
         if (params.maxTickets != 0 && params.maxTickets < params.minTickets) revert MaxLessThanMin();
 
+        // At deployment, tier is 0 => base min range cost.
         uint256 minEntry = (params.minPurchaseAmount == 0) ? 1 : uint256(params.minPurchaseAmount);
         uint256 requiredMinPrice = Math.ceilDiv(MIN_NEW_RANGE_COST_BASE, minEntry);
         if (params.ticketPrice < requiredMinPrice) revert BatchTooCheap();
@@ -210,8 +202,6 @@ contract SingleWinnerLottery is ReentrancyGuard {
         feeRecipient = params.feeRecipient;
         protocolFeePercent = params.protocolFeePercent;
         creator = params.creator;
-
-        finalizer = params.finalizer;
 
         name = params.name;
         createdAt = uint64(block.timestamp);
@@ -230,24 +220,29 @@ contract SingleWinnerLottery is ReentrancyGuard {
     // Range policy + UX getters
     // -------------------------
 
+    /// @notice Minimum totalCost required to CREATE a new range at a given rangeCount (before adding the new one).
     function minNewRangeCostAt(uint256 rangeCount) public pure returns (uint256) {
         uint256 tier = rangeCount / RANGE_STEP;
         return MIN_NEW_RANGE_COST_BASE + (tier * RANGE_COST_STEP);
     }
 
+    /// @notice Minimum totalCost required to create a new range RIGHT NOW.
     function minNewRangeCostNow() public view returns (uint256) {
         return minNewRangeCostAt(ticketRanges.length);
     }
 
+    /// @notice Minimum ticket count required (at current ticketPrice) to be allowed to create a new range RIGHT NOW.
     function minTicketsToOpenNewRangeNow() external view returns (uint256) {
         return Math.ceilDiv(minNewRangeCostNow(), ticketPrice);
     }
 
+    /// @notice Whether a buyer would create a new range (i.e., buyer != last buyer).
     function wouldCreateNewRange(address buyer) public view returns (bool) {
         uint256 len = ticketRanges.length;
         return (len == 0 || ticketRanges[len - 1].buyer != buyer);
     }
 
+    /// @notice High-level range policy constants in one call.
     function getRangePolicy()
         external
         pure
@@ -256,6 +251,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         return (MAX_RANGES, RANGE_STEP, MIN_NEW_RANGE_COST_BASE, RANGE_COST_STEP);
     }
 
+    /// @notice Current tier info to show users why min changes over time.
     function getRangeTierInfo()
         external
         view
@@ -275,10 +271,12 @@ contract SingleWinnerLottery is ReentrancyGuard {
         rangesUntilNextTier = (rangeCount >= nextTierAtRangeCount) ? 0 : (nextTierAtRangeCount - rangeCount);
     }
 
+    /// @notice Range count.
     function getTicketRangesCount() external view returns (uint256) {
         return ticketRanges.length;
     }
 
+    /// @notice Get a single range with explicit lowerBound/size (better UX than only upperBound).
     function getRangeAt(uint256 index)
         external
         view
@@ -294,6 +292,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         size = upperBound - lowerBound;
     }
 
+    /// @notice Paginated ranges including lowerBounds for UI rendering.
     function getRangesWithBounds(uint256 start, uint256 limit)
         external
         view
@@ -319,6 +318,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         }
     }
 
+    /// @notice Find which range owns a ticket index (0..sold-1).
     function findRangeForTicket(uint256 ticketIndex) external view returns (uint256 rangeIndex, address buyer) {
         uint256 sold = getSold();
         if (ticketIndex >= sold) revert AccountingMismatch();
@@ -391,6 +391,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (!returning) {
             if (ticketRanges.length >= MAX_RANGES) revert TooManyRanges();
 
+            // Dynamic min cost: +1 USDC every 10k ranges.
             uint256 minCost = minNewRangeCostAt(ticketRanges.length);
             if (totalCost < minCost) revert BatchTooCheap();
         }
@@ -420,7 +421,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         if (balAfter < balBefore + totalCost) revert UnexpectedTransferAmount();
     }
 
-    // FINALIZE IS NOW PERMISSIONLESS
+    // FINALIZE IS PERMISSIONLESS
     function finalize() external payable nonReentrant {
         if (status != Status.Open) revert LotteryNotOpen();
         if (entropyRequestId != 0) revert RequestPending();
@@ -455,6 +456,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         emit LotteryFinalized(requestId, sold, entropyProvider);
     }
 
+    // NOTE: keep name as-is: _entropyCallback
     function _entropyCallback(uint64 sequenceNumber, address provider, bytes32 randomNumber) external {
         if (msg.sender != address(entropy)) revert UnauthorizedCallback();
 
@@ -470,7 +472,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         _resolve(randomNumber);
     }
 
-    // EMERGENCY HATCH IS NOW PERMISSIONLESS
+    // EMERGENCY HATCH IS PERMISSIONLESS
     function forceCancelStuck() external nonReentrant {
         if (status != Status.Drawing) revert NotDrawing();
         if (block.timestamp <= drawingRequestedAt + HATCH_DELAY) revert EarlyCancellationRequest();
@@ -486,6 +488,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
         uint256 len = ticketRanges.length;
         if (len == 0 || uint256(ticketRanges[len - 1].upperBound) != total) revert AccountingMismatch();
 
+        // clear drawing state
         entropyRequestId = 0;
         soldAtDrawing = 0;
         drawingRequestedAt = 0;
@@ -530,6 +533,7 @@ contract SingleWinnerLottery is ReentrancyGuard {
 
         status = Status.Canceled;
 
+        // clear drawing state
         selectedProvider = address(0);
         drawingRequestedAt = 0;
         entropyRequestId = 0;
