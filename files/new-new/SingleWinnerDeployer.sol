@@ -49,6 +49,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         uint64 maxTickets
     );
 
+    // admin kept private (no auto-generated getter)
     address private _admin;
 
     modifier onlyOwner() {
@@ -66,7 +67,7 @@ contract SingleWinnerDeployer is ReentrancyGuard {
     address public feeRecipient;
     uint256 public protocolFeePercent;
 
-    // kept to match SingleWinnerLottery params (even if lottery doesn't currently enforce it)
+    // kept to match SingleWinnerLottery params (lottery does not enforce it today)
     address public finalizer;
 
     uint256 public constant MAX_BATCH_BUY = 1000;
@@ -114,6 +115,13 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         emit ConfigUpdated(_usdc, _entropy, _entropyProvider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
     }
 
+    // Optional but useful for future admin rotation (multisig change, etc).
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
+        emit DeployerOwnershipTransferred(_admin, newOwner);
+        _admin = newOwner;
+    }
+
     function setConfig(
         address _usdc,
         address _entropy,
@@ -145,12 +153,6 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         emit ConfigUpdated(_usdc, _entropy, _provider, _callbackGasLimit, _feeRecipient, _protocolFeePercent, _finalizer);
     }
 
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit DeployerOwnershipTransferred(_admin, newOwner);
-        _admin = newOwner;
-    }
-
     function getConfig()
         external
         view
@@ -165,6 +167,21 @@ contract SingleWinnerDeployer is ReentrancyGuard {
         )
     {
         return (usdc, entropy, entropyProvider, callbackGasLimit, feeRecipient, protocolFeePercent, finalizer);
+    }
+
+    /// @notice UI helper to avoid hardcoding deployer limits in frontend.
+    function getLimits()
+        external
+        pure
+        returns (
+            uint256 maxBatchBuy,
+            uint256 minNewRangeCost,
+            uint256 maxTicketPrice,
+            uint256 maxPotSize,
+            uint64 maxDuration
+        )
+    {
+        return (MAX_BATCH_BUY, MIN_NEW_RANGE_COST, MAX_TICKET_PRICE, MAX_POT_SIZE, MAX_DURATION);
     }
 
     function quoteEntropyFee() external view returns (uint256 fee) {
