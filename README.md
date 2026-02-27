@@ -1,3 +1,5 @@
+# Ppopgi (뽑기) Smart Contracts
+
 Ppopgi Smart Contracts contains the core on-chain logic powering **Ppopgi**, a single-winner raffle protocol deployed on **Etherlink (Tezos L2, EVM)**.
 
 The repository includes:
